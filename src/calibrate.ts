@@ -31,10 +31,6 @@ async function main() {
   const context = await browser.newContext({
     viewport: config.browser.viewport,
     ignoreHTTPSErrors: true,
-    httpCredentials: config.webvisu.username && config.webvisu.password ? {
-      username: config.webvisu.username,
-      password: config.webvisu.password,
-    } : undefined,
   });
 
   const page = await context.newPage();

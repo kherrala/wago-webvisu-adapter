@@ -36,7 +36,6 @@ The solution consists of two containers:
 
 - Docker and Docker Compose
 - Network access to the WAGO PLC
-- WebVisu credentials
 
 For local development:
 - Node.js 18+
@@ -44,17 +43,12 @@ For local development:
 
 ## Quick Start with Docker
 
-1. Create environment file:
-```bash
-echo "WEBVISU_PASSWORD=your-password" > .env
-```
-
-2. Build and start:
+1. Build and start:
 ```bash
 docker-compose up -d
 ```
 
-3. Check status:
+2. Check status:
 ```bash
 docker-compose ps
 docker-compose logs -f
@@ -72,8 +66,6 @@ curl http://localhost:8080/api/lights
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WEBVISU_USERNAME` | (empty) | WebVisu authentication username |
-| `WEBVISU_PASSWORD` | (empty) | WebVisu authentication password |
 | `PORT` | `8080` | HTTP API server port |
 | `MCP_PORT` | `3002` | MCP SSE server port |
 | `HEADLESS` | `true` | Run browser in headless mode |
@@ -189,13 +181,13 @@ npm run build
 
 ```bash
 # Development mode
-WEBVISU_USERNAME=admin WEBVISU_PASSWORD=secret npm run dev
+npm run dev
 
 # With visible browser (for debugging)
-WEBVISU_USERNAME=admin WEBVISU_PASSWORD=secret HEADLESS=false npm run dev
+HEADLESS=false npm run dev
 
 # Production
-WEBVISU_USERNAME=admin WEBVISU_PASSWORD=secret npm start
+npm start
 ```
 
 ### MCP Server (Python)
@@ -213,7 +205,7 @@ The UI coordinates in `src/config.ts` may need adjustment for your specific WebV
 ### Interactive Calibration Tool
 
 ```bash
-WEBVISU_USERNAME=admin WEBVISU_PASSWORD=secret npx ts-node src/calibrate.ts
+npx ts-node src/calibrate.ts
 ```
 
 This opens a visible browser window. Click on UI elements to see their coordinates logged to the console.
@@ -221,7 +213,7 @@ This opens a visible browser window. Click on UI elements to see their coordinat
 ### Connection Test Tool
 
 ```bash
-WEBVISU_USERNAME=admin WEBVISU_PASSWORD=secret npm run test:connection
+npm run test:connection
 ```
 
 Takes screenshots at each step and saves them to `calibration-screenshots/` for verification.
@@ -275,7 +267,7 @@ If the adapter times out during initialization:
 
 1. **Test network connectivity:**
    ```bash
-   curl -k -u admin:password https://192.168.1.10/webvisu/webvisu.htm
+   curl -k https://192.168.1.10/webvisu/webvisu.htm
    ```
 
 2. **Run with visible browser:**
@@ -301,12 +293,6 @@ If the adapter times out during initialization:
    ```bash
    docker-compose logs mcp-server
    ```
-
-### Authentication Errors
-
-- Verify credentials are correct
-- Check if the WebVisu uses a different authentication method
-- Some WAGO devices may require form-based login instead of HTTP Basic Auth
 
 ### Operations Not Working
 

@@ -13,9 +13,6 @@ export const config = {
       toggleButton: 300,       // After clicking Ohjaus button
       statusRead: 500,          // Before reading status indicator
     },
-    // Authentication credentials (set via environment variables)
-    username: process.env.WEBVISU_USERNAME || '',
-    password: process.env.WEBVISU_PASSWORD || '',
   },
   server: {
     port: parseInt(process.env.PORT || '8080', 10),

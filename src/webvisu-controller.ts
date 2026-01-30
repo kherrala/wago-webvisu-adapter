@@ -41,10 +41,6 @@ export class WebVisuController {
       viewport: config.browser.viewport,
       ignoreHTTPSErrors: true, // WebVisu often uses self-signed certs
       // HTTP Basic Authentication
-      httpCredentials: config.webvisu.username && config.webvisu.password ? {
-        username: config.webvisu.username,
-        password: config.webvisu.password,
-      } : undefined,
     });
 
     this.page = await this.context.newPage();
