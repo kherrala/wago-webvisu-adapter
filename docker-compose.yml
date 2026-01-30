@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  wago-webvisu-adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wago-webvisu-adapter
+    restart: unless-stopped
+    ports:
+      # HTTP API
+      - "${PORT:-8080}:8080"
+    environment:
+      # WebVisu connection
+      - WEBVISU_USERNAME=${WEBVISU_USERNAME}
+      - WEBVISU_PASSWORD=${WEBVISU_PASSWORD}
+      # Server port
+      - PORT=8080
+      # Browser settings
+      - HEADLESS=true
+    # Required for Playwright to run in container
+    shm_size: '2gb'
+    # Security options for Chrome
+    security_opt:
+      - seccomp:unconfined
+    # Network access to WAGO PLC
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    container_name: mcp-server
+    restart: unless-stopped
+    ports:
+      # MCP SSE endpoint
+      - "${MCP_PORT:-3002}:3002"
+    environment:
+      - MCP_PORT=3002
+      - API_BASE_URL=http://wago-webvisu-adapter:8080
+    depends_on:
+      wago-webvisu-adapter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:3002/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# For development with visible browser (requires X11)
+# Uncomment and run with: docker-compose --profile dev up
+  wago-webvisu-adapter-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wago-webvisu-adapter-dev
+    profiles:
+      - dev
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - WEBVISU_USERNAME=${WEBVISU_USERNAME}
+      - WEBVISU_PASSWORD=${WEBVISU_PASSWORD}
+      - PORT=8080
+      - HEADLESS=false
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    shm_size: '2gb'
+    security_opt:
+      - seccomp:unconfined
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
