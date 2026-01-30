@@ -5,15 +5,13 @@ Exposes light switch controls as MCP tools for Claude Desktop integration
 
 import os
 import logging
+import json
 import httpx
 import uvicorn
 
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
-from starlette.applications import Starlette
-from starlette.routing import Route, Mount
-from starlette.responses import JSONResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp-server")
@@ -22,10 +20,13 @@ logger = logging.getLogger("mcp-server")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8080")
 
 # Create MCP server
-app = Server("wago-webvisu-adapter")
+mcp_server = Server("wago-webvisu-adapter")
+
+# Create SSE transport
+sse = SseServerTransport("/messages/")
 
 
-@app.list_tools()
+@mcp_server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available tools."""
     return [
@@ -69,7 +70,7 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-@app.call_tool()
+@mcp_server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls."""
     logger.info(f"Tool called: {name} with args: {arguments}")
@@ -109,34 +110,59 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=f'{{"error": "Connection error", "message": "{str(e)}"}}')]
 
 
-def create_starlette_app():
-    """Create Starlette app with SSE transport for MCP."""
-    sse = SseServerTransport("/messages/")
+async def handle_sse(scope, receive, send):
+    """Handle SSE connections."""
+    logger.info("New SSE connection")
+    async with sse.connect_sse(scope, receive, send) as streams:
+        await mcp_server.run(
+            streams[0], streams[1], mcp_server.create_initialization_options()
+        )
 
-    async def handle_sse(request):
-        async with sse.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
-            await app.run(
-                streams[0], streams[1], app.create_initialization_options()
-            )
 
-    async def handle_messages(request):
-        await sse.handle_post_message(request.scope, request.receive, request._send)
+async def handle_health(scope, receive, send):
+    """Handle health check."""
+    await send({
+        "type": "http.response.start",
+        "status": 200,
+        "headers": [[b"content-type", b"application/json"]],
+    })
+    await send({
+        "type": "http.response.body",
+        "body": b'{"status": "ok", "service": "wago-webvisu-mcp"}',
+    })
 
-    async def health_check(request):
-        return JSONResponse({"status": "ok", "service": "wago-webvisu-mcp"})
 
-    starlette_app = Starlette(
-        debug=False,
-        routes=[
-            Route("/health", health_check),
-            Route("/sse", handle_sse),
-            Mount("/messages/", routes=[Route("/", handle_messages, methods=["POST"])]),
-        ],
-    )
+async def app(scope, receive, send):
+    """Main ASGI application with routing."""
+    if scope["type"] == "http":
+        path = scope["path"]
+        method = scope["method"]
 
-    return starlette_app
+        if path == "/health" and method == "GET":
+            await handle_health(scope, receive, send)
+        elif path == "/sse" and method == "GET":
+            await handle_sse(scope, receive, send)
+        elif path.startswith("/messages") and method == "POST":
+            await sse.handle_post_message(scope, receive, send)
+        else:
+            # 404
+            await send({
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [[b"content-type", b"text/plain"]],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"Not Found",
+            })
+    elif scope["type"] == "lifespan":
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                await send({"type": "lifespan.startup.complete"})
+            elif message["type"] == "lifespan.shutdown":
+                await send({"type": "lifespan.shutdown.complete"})
+                return
 
 
 def main():
@@ -149,8 +175,7 @@ def main():
     logger.info(f"  Health: http://{host}:{port}/health")
     logger.info(f"  API Backend: {API_BASE_URL}")
 
-    starlette_app = create_starlette_app()
-    uvicorn.run(starlette_app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
