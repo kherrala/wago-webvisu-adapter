@@ -91,30 +91,58 @@ curl http://localhost:8080/api/lights
 Response:
 ```json
 {
+  "count": 48,
   "lights": [
-    { "id": "kylpyhuone-1", "name": "Kylpyhuone 1", "href": "/api/lights/kylpyhuone-1" },
-    { "id": "keittio-1", "name": "Keittiö 1", "href": "/api/lights/keittio-1" }
+    {
+      "id": "kylpyhuone-1",
+      "name": "Kylpyhuone 1",
+      "firstPress": "Kylpyhuone alakerta",
+      "secondPress": null,
+      "hasDualFunction": false,
+      "href": "/api/lights/kylpyhuone-1"
+    },
+    {
+      "id": "kylpyhuone-2",
+      "name": "Kylpyhuone 2",
+      "firstPress": "Sauna laude LED",
+      "secondPress": "Sauna siivousvalo",
+      "hasDualFunction": true,
+      "href": "/api/lights/kylpyhuone-2"
+    }
   ]
 }
 ```
 
 ### Get Light Status
 ```bash
-curl http://localhost:8080/api/lights/kylpyhuone-1
+curl http://localhost:8080/api/lights/kylpyhuone-2
 ```
 
-Response:
+Response for a dual-function switch:
 ```json
 {
-  "id": "kylpyhuone-1",
-  "name": "Kylpyhuone 1",
-  "isOn": true
+  "id": "kylpyhuone-2",
+  "name": "Kylpyhuone 2",
+  "isOn": true,
+  "isOn2": false,
+  "firstPress": "Sauna laude LED",
+  "secondPress": "Sauna siivousvalo",
+  "hasDualFunction": true,
+  "_links": {
+    "self": "/api/lights/kylpyhuone-2",
+    "toggle": "/api/lights/kylpyhuone-2/toggle",
+    "toggleSecond": "/api/lights/kylpyhuone-2/toggle?function=2"
+  }
 }
 ```
 
 ### Toggle Light
 ```bash
+# Toggle first function (default)
 curl -X POST http://localhost:8080/api/lights/kylpyhuone-1/toggle
+
+# Toggle second function (for dual-function switches)
+curl -X POST http://localhost:8080/api/lights/kylpyhuone-2/toggle?function=2
 ```
 
 ### Debug: Take Screenshot
@@ -151,9 +179,17 @@ docker-compose up -d
 
 | Tool | Description |
 |------|-------------|
-| `list_lights` | List all available light switches |
-| `get_light_status` | Get status of a specific light |
-| `toggle_light` | Toggle a light on/off |
+| `list_lights` | List all available light switches with their functions (firstPress/secondPress) |
+| `get_light_status` | Get status of a specific light (includes isOn2 for dual-function switches) |
+| `toggle_light` | Toggle a light on/off. Supports `function` parameter (1 or 2) for dual-function switches |
+
+### Dual-Function Switches
+
+Some physical switches control two different lights:
+- **First press** toggles the primary light (firstPress)
+- **Second press** toggles the secondary light (secondPress)
+
+The MCP tools expose this via the optional `function` parameter on `toggle_light`.
 
 ### Example Claude Prompts
 
@@ -161,6 +197,8 @@ docker-compose up -d
 - "Turn on the kitchen light"
 - "What's the status of the bathroom lights?"
 - "Toggle the hallway light"
+- "Turn on the sauna cleaning light" (uses function=2 on kylpyhuone-2)
+- "Which switches have dual functions?"
 
 ## Local Development
 
@@ -231,7 +269,10 @@ export const uiCoordinates = {
   lightSwitches: {
     dropdown: { x: 280, y: 130 },
     dropdownArrow: { x: 523, y: 139 },
-    ohjausButton: { x: 280, y: 159 },
+    ohjausButton: { x: 280, y: 159 },      // First function button
+    ohjausButton2: { x: 290, y: 240 },     // Second function button
+    statusIndicator: { x: 505, y: 204 },   // First status indicator
+    statusIndicator2: { x: 505, y: 274 },  // Second status indicator
     // ...
   },
 };

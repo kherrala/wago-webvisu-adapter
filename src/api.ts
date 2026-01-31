@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { webVisuController } from './webvisu-controller';
-import { lightSwitches, lightSwitchNames, lightSwitchList } from './config';
+import { lightSwitches, lightSwitchNames, lightSwitchList, lightSwitchById } from './config';
 import pino from 'pino';
 
 const logger = pino({ name: 'api' });
@@ -26,12 +26,17 @@ app.get('/health', async (req: Request, res: Response) => {
 // List all available light switches
 app.get('/api/lights', async (req: Request, res: Response) => {
   try {
-    const lights = lightSwitchList.map(light => ({
-      id: light.id,
-      name: light.name,
-      index: light.index,
-      href: `/api/lights/${light.id}`,
-    }));
+    const lights = lightSwitchList
+      .filter(light => light.firstPress) // Only include switches with actual functions
+      .map(light => ({
+        id: light.id,
+        name: light.name,
+        index: light.index,
+        firstPress: light.firstPress,
+        secondPress: (light as any).secondPress || null,
+        hasDualFunction: !!(light as any).secondPress,
+        href: `/api/lights/${light.id}`,
+      }));
 
     res.json({
       count: lights.length,
@@ -53,18 +58,28 @@ app.get('/api/lights/:id', async (req: Request, res: Response) => {
   if (!(id in lightSwitches)) {
     res.status(404).json({
       error: 'Light not found',
-      validIds: Object.keys(lightSwitches),
+      validIds: Object.keys(lightSwitches).filter(k => lightSwitchById[k]?.firstPress),
     });
     return;
   }
 
+  const switchInfo = lightSwitchById[id];
+  const hasDualFunction = !!(switchInfo as any)?.secondPress;
+
   try {
     const status = await webVisuController.getLightStatus(id);
     res.json({
-      ...status,
+      id: status.id,
+      name: status.name,
+      isOn: status.isOn,
+      ...(status.isOn2 !== undefined ? { isOn2: status.isOn2 } : {}),
+      firstPress: switchInfo?.firstPress || null,
+      secondPress: (switchInfo as any)?.secondPress || null,
+      hasDualFunction,
       _links: {
         self: `/api/lights/${id}`,
         toggle: `/api/lights/${id}/toggle`,
+        ...(hasDualFunction ? { toggleSecond: `/api/lights/${id}/toggle?function=2` } : {}),
       },
     });
   } catch (error) {
@@ -74,8 +89,11 @@ app.get('/api/lights/:id', async (req: Request, res: Response) => {
 });
 
 // Toggle a light switch
+// Use ?function=2 to toggle the second function of dual-function switches
 app.post('/api/lights/:id/toggle', async (req: Request, res: Response) => {
   const { id } = req.params;
+  const functionParam = req.query.function as string | undefined;
+  const functionNumber = functionParam === '2' ? 2 : 1;
 
   if (!(id in lightSwitches)) {
     res.status(404).json({
@@ -85,23 +103,44 @@ app.post('/api/lights/:id/toggle', async (req: Request, res: Response) => {
     return;
   }
 
+  const switchInfo = lightSwitchById[id];
+  const hasDualFunction = !!(switchInfo as any)?.secondPress;
+
+  // Validate function=2 is only used for dual-function switches
+  if (functionNumber === 2 && !hasDualFunction) {
+    res.status(400).json({
+      error: 'This switch does not have a second function',
+      id,
+      name: switchInfo?.name || id,
+      firstPress: switchInfo?.firstPress || null,
+    });
+    return;
+  }
+
   try {
-    await webVisuController.toggleLight(id);
+    await webVisuController.toggleLight(id, functionNumber as 1 | 2);
+
+    const functionInfo = functionNumber === 2
+      ? (switchInfo as any)?.secondPress
+      : switchInfo?.firstPress;
 
     // Don't fetch status after toggle - it causes extra UI interactions
     // User can call GET /api/lights/:id separately if needed
     res.json({
-      message: 'Light toggled successfully',
+      message: `Light toggled successfully (function ${functionNumber})`,
       id,
       name: lightSwitchNames[lightSwitches[id]] || id,
+      function: functionNumber,
+      controls: functionInfo || null,
       _links: {
         self: `/api/lights/${id}`,
         toggle: `/api/lights/${id}/toggle`,
+        ...(hasDualFunction ? { toggleSecond: `/api/lights/${id}/toggle?function=2` } : {}),
         status: `/api/lights/${id}`,
       },
     });
   } catch (error) {
-    logger.error({ error, lightId: id }, 'Error toggling light');
+    logger.error({ error, lightId: id, function: functionNumber }, 'Error toggling light');
     res.status(500).json({ error: 'Failed to toggle light' });
   }
 });

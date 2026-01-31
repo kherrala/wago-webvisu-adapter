@@ -1,5 +1,5 @@
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
-import { config, uiCoordinates, lightSwitches, lightSwitchNames } from './config';
+import { config, uiCoordinates, lightSwitches, lightSwitchNames, lightSwitchById } from './config';
 import pino from 'pino';
 
 const logger = pino({ name: 'webvisu-controller' });
@@ -8,6 +8,7 @@ export interface LightStatus {
   id: string;
   name: string;
   isOn: boolean;
+  isOn2?: boolean; // Second function status for dual-function switches
 }
 
 export class WebVisuController {
@@ -274,23 +275,24 @@ export class WebVisuController {
     });
   }
 
-  async toggleLight(lightId: string): Promise<void> {
+  async toggleLight(lightId: string, functionNumber: 1 | 2 = 1): Promise<void> {
     return this.queueOperation(async () => {
       this.ensureInitialized();
 
-      logger.info(`Toggling light: ${lightId}`);
+      logger.info(`Toggling light: ${lightId} (function ${functionNumber})`);
 
       // First select the light switch (using internal non-queued method)
       await this.doSelectLightSwitch(lightId);
 
-      // Click the "Ohjaus" button
-      await this.clickCanvas(
-        uiCoordinates.lightSwitches.ohjausButton.x,
-        uiCoordinates.lightSwitches.ohjausButton.y
-      );
+      // Click the appropriate "Ohjaus" button based on function number
+      const ohjausButton = functionNumber === 2
+        ? uiCoordinates.lightSwitches.ohjausButton2
+        : uiCoordinates.lightSwitches.ohjausButton;
+
+      await this.clickCanvas(ohjausButton.x, ohjausButton.y);
       await this.delay(config.webvisu.delays.toggleButton);
 
-      logger.info(`Light ${lightId} toggled`);
+      logger.info(`Light ${lightId} function ${functionNumber} toggled`);
     });
   }
 
@@ -307,27 +309,34 @@ export class WebVisuController {
       await this.doSelectLightSwitch(lightId);
       await this.delay(config.webvisu.delays.statusRead);
 
-      // Take a screenshot and analyze the status indicator
-      // The indicator appears to be a circular icon that changes color
-      const screenshot = await this.page!.screenshot();
+      // Check if this is a dual-function switch
+      const switchInfo = lightSwitchById[lightId];
+      const hasDualFunction = !!(switchInfo as any)?.secondPress;
 
-      // For a proper implementation, we would analyze the pixel color
-      // at the status indicator position. For this PoC, we'll use a
-      // simplified approach.
-      const isOn = await this.checkStatusIndicator();
+      // Read the first status indicator
+      const isOn = await this.checkStatusIndicator(1);
+
+      // Read the second status indicator for dual-function switches
+      let isOn2: boolean | undefined;
+      if (hasDualFunction) {
+        isOn2 = await this.checkStatusIndicator(2);
+      }
 
       return {
         id: lightId,
         name: lightSwitchNames[index] || lightId,
         isOn,
+        ...(isOn2 !== undefined ? { isOn2 } : {}),
       };
     });
   }
 
-  private async checkStatusIndicator(): Promise<boolean> {
+  private async checkStatusIndicator(indicatorNumber: 1 | 2 = 1): Promise<boolean> {
     this.ensureInitialized();
 
-    const coords = uiCoordinates.lightSwitches.statusIndicator;
+    const coords = indicatorNumber === 2
+      ? uiCoordinates.lightSwitches.statusIndicator2
+      : uiCoordinates.lightSwitches.statusIndicator;
 
     // Get the canvas bounding box to calculate absolute coordinates
     const canvas = await this.page!.locator('canvas').first();
