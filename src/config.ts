@@ -8,10 +8,10 @@ export const config = {
     delays: {
       tabClick: 2000,           // After clicking a tab
       dropdownOpen: 300,        // After clicking dropdown arrow to open
-      dropdownScroll: 300,      // After dragging scrollbar
+      dropdownScroll: 100,      // After dragging scrollbar
       dropdownSelect: 300,      // After clicking an item to select
       toggleButton: 300,       // After clicking Ohjaus button
-      statusRead: 500,          // Before reading status indicator
+      statusRead: 600,          // Before reading status indicator
     },
   },
   server: {
@@ -19,7 +19,7 @@ export const config = {
   },
   browser: {
     headless: process.env.HEADLESS !== 'false',
-    viewport: { width: 1280, height: 768 },
+    viewport: { width: 1024, height: 768 },
   },
 };
 
@@ -46,22 +46,20 @@ export const uiCoordinates = {
     dropdownArrow: { x: 523, y: 139 },
     // "Ohjaus" (Control) button for first function - gray button below the top dropdown
     ohjausButton: { x: 290, y: 170 },
-    // Second "Ohjaus" button for dual-function switches (below the first one)
-    ohjausButton2: { x: 290, y: 240 },
     // Status indicator position for first function (the circular icon)
     statusIndicator: { x: 505, y: 204 },
     // Status indicator position for second function (below the first indicator)
-    statusIndicator2: { x: 505, y: 274 },
+    statusIndicator2: { x: 505, y: 235 },
     // Dropdown list configuration (when top dropdown is open)
-    dropdownList: {
+    dropdownList: { // 155 - 295 = 140
       // Position of first visible item "0" in open dropdown
-      firstItemY: 132,
+      firstItemY: 155,
       // Height of each item
-      itemHeight: 29,
+      itemHeight: 28,
       // Number of items visible at once in dropdown (0, Kylpyhuone 1, Kylpyhuone 2, WC alakerta 1, WC alakerta 2)
       visibleItems: 5,
       // X position for clicking items (center of dropdown list)
-      itemX: 275,
+      itemX: 290,
     },
     // Scrollbar for dropdown (when open) - on right edge of dropdown list
     scrollbar: {

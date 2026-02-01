@@ -284,10 +284,7 @@ export class WebVisuController {
       // First select the light switch (using internal non-queued method)
       await this.doSelectLightSwitch(lightId);
 
-      // Click the appropriate "Ohjaus" button based on function number
-      const ohjausButton = functionNumber === 2
-        ? uiCoordinates.lightSwitches.ohjausButton2
-        : uiCoordinates.lightSwitches.ohjausButton;
+      const ohjausButton = uiCoordinates.lightSwitches.ohjausButton;
 
       await this.clickCanvas(ohjausButton.x, ohjausButton.y);
       await this.delay(config.webvisu.delays.toggleButton);
