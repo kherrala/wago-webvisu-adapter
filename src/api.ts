@@ -1,6 +1,8 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { webVisuController } from './webvisu-controller';
 import { lightSwitches, lightSwitchNames, lightSwitchList, lightSwitchById } from './config';
+import { getAllCachedStatuses, upsertLightStatus } from './database';
+import { getPollingStatus } from './polling-service';
 import pino from 'pino';
 
 const logger = pino({ name: 'api' });
@@ -23,26 +25,39 @@ app.get('/health', async (req: Request, res: Response) => {
   });
 });
 
-// List all available light switches
+// List all available light switches with cached status
 app.get('/api/lights', async (req: Request, res: Response) => {
   try {
+    // Get all cached statuses as a lookup map
+    const cachedStatuses = new Map(
+      getAllCachedStatuses().map(s => [s.id, s])
+    );
+
     const lights = lightSwitchList
       .filter(light => light.firstPress) // Only include switches with actual functions
-      .map(light => ({
-        id: light.id,
-        name: light.name,
-        index: light.index,
-        firstPress: light.firstPress,
-        secondPress: (light as any).secondPress || null,
-        hasDualFunction: !!(light as any).secondPress,
-        href: `/api/lights/${light.id}`,
-      }));
+      .map(light => {
+        const cached = cachedStatuses.get(light.id);
+        return {
+          id: light.id,
+          name: light.name,
+          index: light.index,
+          firstPress: light.firstPress,
+          secondPress: (light as any).secondPress || null,
+          hasDualFunction: !!(light as any).secondPress,
+          // Include cached status if available
+          isOn: cached?.isOn ?? null,
+          isOn2: cached?.isOn2 ?? null,
+          polledAt: cached?.polledAt ?? null,
+          href: `/api/lights/${light.id}`,
+        };
+      });
 
     res.json({
       count: lights.length,
       lights,
       _links: {
         self: '/api/lights',
+        polling: '/api/polling/status',
       },
     });
   } catch (error) {
@@ -51,7 +66,7 @@ app.get('/api/lights', async (req: Request, res: Response) => {
   }
 });
 
-// Get status of a specific light
+// Get status of a specific light (live query, also updates cache)
 app.get('/api/lights/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
 
@@ -68,6 +83,17 @@ app.get('/api/lights/:id', async (req: Request, res: Response) => {
 
   try {
     const status = await webVisuController.getLightStatus(id);
+
+    // Store the status in the database
+    upsertLightStatus({
+      id: status.id,
+      name: status.name,
+      isOn: status.isOn,
+      isOn2: status.isOn2,
+      firstPress: switchInfo?.firstPress ?? null,
+      secondPress: (switchInfo as any)?.secondPress ?? null,
+    });
+
     res.json({
       id: status.id,
       name: status.name,
@@ -142,6 +168,23 @@ app.post('/api/lights/:id/toggle', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error({ error, lightId: id, function: functionNumber }, 'Error toggling light');
     res.status(500).json({ error: 'Failed to toggle light' });
+  }
+});
+
+// Get polling service status
+app.get('/api/polling/status', async (req: Request, res: Response) => {
+  try {
+    const status = getPollingStatus();
+    res.json({
+      ...status,
+      _links: {
+        self: '/api/polling/status',
+        lights: '/api/lights',
+      },
+    });
+  } catch (error) {
+    logger.error({ error }, 'Error getting polling status');
+    res.status(500).json({ error: 'Failed to get polling status' });
   }
 });
 

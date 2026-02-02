@@ -1,6 +1,8 @@
 import { app } from './api';
 import { webVisuController } from './webvisu-controller';
 import { config } from './config';
+import { initDatabase, closeDatabase } from './database';
+import { startPolling, stopPolling } from './polling-service';
 import pino from 'pino';
 
 const logger = pino({
@@ -17,7 +19,9 @@ async function main() {
   // Handle graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down...`);
+    stopPolling();
     await webVisuController.close();
+    closeDatabase();
     process.exit(0);
   };
 
@@ -25,6 +29,10 @@ async function main() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   try {
+    // Initialize database
+    logger.info('Initializing database...');
+    initDatabase();
+
     // Initialize the WebVisu controller (launches browser)
     logger.info('Initializing WebVisu controller...');
     await webVisuController.initialize();
@@ -42,12 +50,18 @@ async function main() {
       logger.info(`  GET  http://localhost:${config.server.port}/api/lights`);
       logger.info(`  GET  http://localhost:${config.server.port}/api/lights/:id`);
       logger.info(`  POST http://localhost:${config.server.port}/api/lights/:id/toggle`);
+      logger.info(`  GET  http://localhost:${config.server.port}/api/polling/status`);
       logger.info(`  GET  http://localhost:${config.server.port}/api/debug/screenshot`);
       logger.info('');
+
+      // Start background polling service after server is ready
+      startPolling();
     });
   } catch (error) {
     logger.error({ error }, 'Failed to start adapter');
+    stopPolling();
     await webVisuController.close();
+    closeDatabase();
     process.exit(1);
   }
 }

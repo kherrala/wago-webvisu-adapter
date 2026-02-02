@@ -3,6 +3,9 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
+# Install build dependencies for native modules (better-sqlite3)
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+
 # Copy package files
 COPY package*.json ./
 COPY tsconfig.json ./
@@ -19,9 +22,12 @@ RUN npm run build
 # Production stage
 FROM node:20-slim
 
-# Install Playwright dependencies and curl for health checks
+# Install Playwright dependencies, build tools for native modules, and curl for health checks
 RUN apt-get update && apt-get install -y \
     curl \
+    python3 \
+    make \
+    g++ \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -46,6 +52,9 @@ WORKDIR /app
 
 # Create non-root user first
 RUN useradd -m -s /bin/bash appuser
+
+# Create data directory for SQLite database
+RUN mkdir -p /data && chown appuser:appuser /data
 
 # Copy package files and install production dependencies
 COPY package*.json ./

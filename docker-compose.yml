@@ -13,6 +13,14 @@ services:
       - PORT=8080
       # Browser settings
       - HEADLESS=true
+      # Database settings
+      - DB_PATH=/data/lights.db
+      # Polling settings
+      - POLLING_ENABLED=true
+      - POLL_INTERVAL_MS=2000
+      - POLL_CYCLE_DELAY_MS=30000
+    volumes:
+      - wago-data:/data
     # Required for Playwright to run in container
     shm_size: '2gb'
     # Security options for Chrome
@@ -77,8 +85,12 @@ services:
       - DISPLAY=${DISPLAY:-:0}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
+      - wago-data:/data
     shm_size: '2gb'
     security_opt:
       - seccomp:unconfined
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  wago-data:

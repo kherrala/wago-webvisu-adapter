@@ -7,11 +7,13 @@ export const config = {
     // Individual delays for each action type (in milliseconds)
     delays: {
       tabClick: 2000,           // After clicking a tab
-      dropdownOpen: 300,        // After clicking dropdown arrow to open
-      dropdownScroll: 100,      // After dragging scrollbar
-      dropdownSelect: 300,      // After clicking an item to select
-      toggleButton: 300,       // After clicking Ohjaus button
-      statusRead: 600,          // Before reading status indicator
+      dropdownOpen: 1500,       // After clicking dropdown arrow to open
+      dropdownScrollStart: 600, // After dragging scrollbar
+      dropdownScrollDrag: 1500,  // After dragging scrollbar
+      dropdownScrollStop: 600,  // After dragging scrollbar
+      dropdownSelect: 400,      // After clicking an item to select
+      toggleButton: 0,          // After clicking Ohjaus button
+      statusRead: 400,            // Before reading status indicator
     },
   },
   server: {
@@ -19,7 +21,14 @@ export const config = {
   },
   browser: {
     headless: process.env.HEADLESS !== 'false',
-    viewport: { width: 1024, height: 768 },
+    viewport: { width: 1280, height: 1024 },
+  },
+  database: {
+    path: process.env.DB_PATH || './data/lights.db',
+  },
+  polling: {
+    enabled: process.env.POLLING_ENABLED !== 'false',
+    cycleDelayMs: parseInt(process.env.POLL_CYCLE_DELAY_MS || '30000', 10),
   },
 };
 
@@ -51,11 +60,11 @@ export const uiCoordinates = {
     // Status indicator position for second function (below the first indicator)
     statusIndicator2: { x: 505, y: 235 },
     // Dropdown list configuration (when top dropdown is open)
-    dropdownList: { // 155 - 295 = 140
+    dropdownList: {
       // Position of first visible item "0" in open dropdown
-      firstItemY: 155,
+      firstItemY: 168,
       // Height of each item
-      itemHeight: 28,
+      itemHeight: 29,
       // Number of items visible at once in dropdown (0, Kylpyhuone 1, Kylpyhuone 2, WC alakerta 1, WC alakerta 2)
       visibleItems: 5,
       // X position for clicking items (center of dropdown list)
@@ -63,14 +72,11 @@ export const uiCoordinates = {
     },
     // Scrollbar for dropdown (when open) - on right edge of dropdown list
     scrollbar: {
-      // Scrollbar thumb starting position (top of track where thumb rests initially)
-      thumbStart: { x: 528, y: 172 },
-      // Scrollbar track boundaries for dragging
-      track: {
-        x: 528,
-        topY: 175,      // Top of scrollable track area
-        bottomY: 285,   // Bottom of scrollable track area
-      },
+      x: 528,
+      // Range to scan for detecting the thumb (full track area including arrows)
+      scanRange: { topY: 170, bottomY: 286 },
+      // Range where thumb CENTER can be positioned (for dragging calculations)
+      thumbRange: { topY: 174, bottomY: 282 },
     },
   },
 };

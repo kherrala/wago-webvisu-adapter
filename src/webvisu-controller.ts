@@ -17,9 +17,13 @@ export class WebVisuController {
   private page: Page | null = null;
   private isInitialized = false;
   private operationQueue: Promise<unknown> = Promise.resolve();
+  private pendingOperations = 0;
 
-  // Track the current scrollbar thumb Y position (null = at top/initial position)
-  private scrollbarThumbY: number | null = null;
+  // Track the first visible item index in the dropdown (0 = at top/initial position)
+  // This allows optimized scrolling for sequential access
+  private dropdownFirstVisible: number = 0;
+  // When true, the next selection must scroll to top first to establish known state
+  private dropdownStateUnknown: boolean = false;
 
   async initialize(): Promise<void> {
     if (this.isInitialized) {
@@ -64,7 +68,7 @@ export class WebVisuController {
     // Wait for the canvas to be ready
     // WebVisu uses a canvas element for rendering
     try {
-      await this.page.waitForSelector('canvas', { timeout: config.webvisu.loadTimeout });
+      await this.page.waitForSelector('canvas#foreground', { timeout: config.webvisu.loadTimeout });
     } catch (error) {
       // Take a screenshot to help diagnose the issue
       const screenshot = await this.page.screenshot();
@@ -81,11 +85,16 @@ export class WebVisuController {
     await this.delay(config.webvisu.canvasRenderDelay);
 
     // Log canvas position for debugging
-    const canvas = await this.page.locator('canvas').first();
+    const canvas = await this.page.locator('canvas#foreground');
     const box = await canvas.boundingBox();
     if (box) {
       logger.info(`Canvas position: x=${box.x}, y=${box.y}, width=${box.width}, height=${box.height}`);
     }
+
+    // Navigate to the Napit (light switches) tab once during initialization
+    logger.info('Navigating to Napit tab...');
+    await this.page.mouse.click(uiCoordinates.tabs.napit.x, uiCoordinates.tabs.napit.y);
+    await this.delay(config.webvisu.delays.tabClick);
 
     this.isInitialized = true;
     logger.info('WebVisu controller initialized successfully');
@@ -98,8 +107,104 @@ export class WebVisuController {
       this.context = null;
       this.page = null;
       this.isInitialized = false;
+      this.dropdownFirstVisible = 0;
+      this.dropdownStateUnknown = false;
       logger.info('Browser closed');
     }
+  }
+
+  // Mark dropdown scroll state as unknown - next selection will scroll to top first
+  // Call this if scroll position may be out of sync (e.g., after an error)
+  resetDropdownState(): void {
+    this.dropdownStateUnknown = true;
+    logger.info('Dropdown state marked as unknown - will scroll to top on next selection');
+  }
+
+  // Draw a red debug indicator on the canvas at the specified position
+  private async drawDebugIndicator(x: number, y: number, label: string): Promise<void> {
+    await this.page!.evaluate(({ x, y, label }) => {
+      const canvas = document.getElementById('foreground') as HTMLCanvasElement;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Draw red crosshair
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x - 10, y);
+      ctx.lineTo(x + 10, y);
+      ctx.moveTo(x, y - 10);
+      ctx.lineTo(x, y + 10);
+      ctx.stroke();
+
+      // Draw red circle
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, 2 * Math.PI);
+      ctx.stroke();
+
+      // Draw label with white background
+      ctx.font = '12px monospace';
+      const textWidth = ctx.measureText(label).width;
+      ctx.fillStyle = 'white';
+      ctx.fillRect(x + 12, y - 8, textWidth + 4, 16);
+      ctx.fillStyle = 'red';
+      ctx.fillText(label, x + 14, y + 4);
+    }, { x, y, label });
+
+    await this.delay(200);
+  }
+
+  // Detect the current scrollbar thumb center Y by finding pixels that differ from background
+  private async detectScrollbarThumbCenterY(): Promise<number> {
+    const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
+
+    const result = await this.page!.evaluate(({ x, topY, bottomY }) => {
+      const canvas = document.getElementById('foreground') as HTMLCanvasElement;
+      if (!canvas) return { success: false, error: 'Canvas not found' };
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return { success: false, error: 'Could not get context' };
+
+      // Sample all pixels in scan range
+      const pixels: { y: number; color: string }[] = [];
+      for (let y = topY; y <= bottomY; y++) {
+        const p = ctx.getImageData(x, y, 1, 1).data;
+        pixels.push({ y, color: `${p[0]},${p[1]},${p[2]}` });
+      }
+
+      // Find background color (most common)
+      const counts: Record<string, number> = {};
+      for (const p of pixels) {
+        counts[p.color] = (counts[p.color] || 0) + 1;
+      }
+      const bgColor = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+
+      // Thumb pixels are those different from background
+      const thumbYs = pixels.filter(p => p.color !== bgColor).map(p => p.y);
+
+      if (thumbYs.length === 0) {
+        return { success: false, error: 'No thumb found', bgColor };
+      }
+
+      // Thumb center is average Y of differing pixels
+      const centerY = thumbYs.reduce((a, b) => a + b, 0) / thumbYs.length;
+      return { success: true, centerY, thumbYs: thumbYs.length, bgColor };
+    }, {
+      x: scrollbarConfig.x,
+      topY: scrollbarConfig.scanRange.topY,
+      bottomY: scrollbarConfig.scanRange.bottomY
+    });
+
+    if (result.success && result.centerY !== undefined) {
+      logger.debug(`Thumb detected at Y=${result.centerY.toFixed(1)} (${result.thumbYs} pixels, bg=${result.bgColor})`);
+      // Draw debug indicator for detected thumb position
+      await this.drawDebugIndicator(scrollbarConfig.x, result.centerY, `thumb`);
+      return result.centerY;
+    }
+
+    logger.warn(`Thumb detection failed: ${result.error}`);
+    return scrollbarConfig.thumbRange.topY;
   }
 
   private async delay(ms: number): Promise<void> {
@@ -114,16 +219,25 @@ export class WebVisuController {
 
   // Serialize operations to prevent race conditions on the canvas
   private async queueOperation<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.operationQueue.then(operation);
-    this.operationQueue = result.catch(() => {});
-    return result;
+    this.pendingOperations++;
+    try {
+      const result = this.operationQueue.then(operation);
+      this.operationQueue = result.catch(() => {});
+      return await result;
+    } finally {
+      this.pendingOperations--;
+    }
+  }
+
+  getPendingOperationCount(): number {
+    return this.pendingOperations;
   }
 
   private async clickCanvas(x: number, y: number): Promise<void> {
     this.ensureInitialized();
 
     // Get the canvas bounding box to calculate absolute page coordinates
-    const canvas = await this.page!.locator('canvas').first();
+    const canvas = await this.page!.locator('canvas#foreground');
     const box = await canvas.boundingBox();
 
     if (!box) {
@@ -154,7 +268,7 @@ export class WebVisuController {
     this.ensureInitialized();
 
     // Get the canvas bounding box to calculate absolute page coordinates
-    const canvas = await this.page!.locator('canvas').first();
+    const canvas = await this.page!.locator('canvas#foreground');
     const box = await canvas.boundingBox();
 
     if (!box) {
@@ -172,10 +286,11 @@ export class WebVisuController {
     // Perform drag: move to start, press, move to end, release
     await this.page!.mouse.move(absFromX, absFromY);
     await this.page!.mouse.down();
-    await this.delay(50); // Small delay after pressing
-    await this.page!.mouse.move(absToX, absToY, { steps: 10 }); // Smooth movement
-    await this.delay(50); // Small delay before releasing
+    await this.delay(config.webvisu.delays.dropdownScrollStart); // Small delay after pressing
+    await this.page!.mouse.move(absToX, absToY, { steps: 1 }); // Smooth movement
+    await this.delay(config.webvisu.delays.dropdownScrollDrag); // Small delay before releasing
     await this.page!.mouse.up();
+    await this.delay(config.webvisu.delays.dropdownScrollStop); // Small delay after releasing
     // Note: caller should add appropriate delay after drag
   }
 
@@ -195,7 +310,7 @@ export class WebVisuController {
   // Get canvas info for debugging coordinate issues
   async getCanvasInfo(): Promise<{ x: number; y: number; width: number; height: number } | null> {
     this.ensureInitialized();
-    const canvas = await this.page!.locator('canvas').first();
+    const canvas = await this.page!.locator('canvas#foreground');
     return canvas.boundingBox();
   }
 
@@ -208,10 +323,6 @@ export class WebVisuController {
 
     logger.info(`Selecting light switch: ${lightId} (index: ${index})`);
 
-    // First ensure we're on the Napit (buttons) tab
-    await this.clickPage(uiCoordinates.tabs.napit.x, uiCoordinates.tabs.napit.y);
-    await this.delay(config.webvisu.delays.tabClick);
-
     // Click the dropdown arrow to open it
     await this.clickCanvas(
       uiCoordinates.lightSwitches.dropdownArrow.x,
@@ -221,49 +332,100 @@ export class WebVisuController {
 
     const dropdownConfig = uiCoordinates.lightSwitches.dropdownList;
     const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
-    const totalItems = 56;
+    const totalItems = 57; // Items 0-56
+    const { visibleItems } = dropdownConfig;
 
-    // Check if item is beyond the initially visible items and needs scrolling
-    if (index >= dropdownConfig.visibleItems) {
-      // Calculate scroll position: where should the scrollbar thumb be dragged to?
-      const scrollRange = scrollbarConfig.track.bottomY - scrollbarConfig.track.topY;
+    // thumbRange topY/bottomY represent CENTER position of handle at start/end
+    const { topY, bottomY } = scrollbarConfig.thumbRange;
+    const scrollRange = bottomY - topY;
+    const maxFirstVisible = totalItems - visibleItems; // 57 - 5 = 52
 
-      // Calculate the scroll position proportionally
-      // Scroll so that the target item is visible in the dropdown
-      const scrollPosition = (index - dropdownConfig.visibleItems + 1) / (totalItems - dropdownConfig.visibleItems);
-      const targetScrollY = scrollbarConfig.track.topY + (scrollRange * Math.min(scrollPosition, 1));
+    // Helper to calculate target scrollbar thumb center Y for a given firstVisible
+    // Linear interpolation: firstVisible=0 → topY, firstVisible=maxFirstVisible → bottomY
+    const getTargetScrollY = (firstVisible: number): number => {
+      if (firstVisible <= 0) return topY;
+      if (firstVisible >= maxFirstVisible) return bottomY;
+      // Linear interpolation within the range
+      return topY + (scrollRange * firstVisible / maxFirstVisible);
+    };
 
-      // Start from remembered position, or from thumb start if not set
-      const currentThumbY = this.scrollbarThumbY ?? scrollbarConfig.thumbStart.y;
-
-      logger.info(`Dragging scrollbar from (${scrollbarConfig.track.x}, ${currentThumbY}) to (${scrollbarConfig.track.x}, ${targetScrollY}) for item index ${index}`);
-
-      // Drag the scrollbar thumb from current position to target position
+    // If dropdown state is unknown (after error), scroll to top first to establish known state
+    if (this.dropdownStateUnknown) {
+      logger.info('Dropdown state unknown - scrolling to top to establish known position');
+      // Drag from bottom to top to ensure we reach the top regardless of current position
       await this.dragCanvas(
-        scrollbarConfig.track.x,
-        currentThumbY,
-        scrollbarConfig.track.x,
+        scrollbarConfig.x,
+        scrollbarConfig.thumbRange.bottomY,
+        scrollbarConfig.x,
+        scrollbarConfig.thumbRange.topY
+      );
+      this.dropdownFirstVisible = 0;
+      this.dropdownStateUnknown = false;
+    }
+
+    // Check if item is currently visible
+    const isVisible = index >= this.dropdownFirstVisible &&
+                      index < this.dropdownFirstVisible + visibleItems;
+
+    let itemY: number;
+
+    if (isVisible) {
+      // Item is already visible - no scrolling needed, just click at correct position
+      const positionInView = index - this.dropdownFirstVisible;
+      itemY = dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight);
+      logger.info(`Item ${index} already visible at position ${positionInView} (firstVisible=${this.dropdownFirstVisible}), clicking at Y=${itemY}`);
+    } else {
+      // Item not visible - need to scroll
+      // Use page-based scrolling: scroll so target appears at first position of a new "page"
+      // This optimizes for sequential access (scrolling once every 5 items)
+
+      let targetFirstVisible: number;
+
+      if (index > this.dropdownFirstVisible) {
+        // Scrolling forward - put target at first visible position (position 0)
+        // This way items index, index+1, index+2, index+3, index+4 will be visible
+        targetFirstVisible = index;
+      } else {
+        // Scrolling backward - put target at last visible position
+        // Calculate firstVisible so that index appears at position visibleItems-1
+        targetFirstVisible = Math.max(0, index - (visibleItems - 1));
+      }
+
+      // Clamp to valid range
+      targetFirstVisible = Math.min(targetFirstVisible, maxFirstVisible);
+
+      // Detect actual scrollbar thumb center position
+      const currentScrollY = await this.detectScrollbarThumbCenterY();
+      const targetScrollY = getTargetScrollY(targetFirstVisible);
+
+      logger.info(`Scrolling for item ${index}: firstVisible ${this.dropdownFirstVisible} → ${targetFirstVisible}, scrollY ${currentScrollY.toFixed(1)} → ${targetScrollY.toFixed(1)}`);
+
+      // Draw debug indicator for target scroll position
+      await this.drawDebugIndicator(scrollbarConfig.x, targetScrollY, `target`);
+
+      // Drag from detected/current position to target
+      await this.dragCanvas(
+        scrollbarConfig.x,
+        currentScrollY,
+        scrollbarConfig.x,
         targetScrollY
       );
 
-      // Remember where we left the scrollbar thumb
-      this.scrollbarThumbY = targetScrollY;
+      // Update tracked position
+      this.dropdownFirstVisible = targetFirstVisible;
 
-      await this.delay(config.webvisu.delays.dropdownScroll);
-
-      // Calculate position of item within visible area after scrolling
-      // After scrolling, the target item should be near the bottom of visible area
-      const visiblePosition = dropdownConfig.visibleItems - 1; // Last visible slot
-      const itemY = dropdownConfig.firstItemY + (visiblePosition * dropdownConfig.itemHeight);
-
-      await this.clickCanvas(dropdownConfig.itemX, itemY);
-    } else {
-      // Item is in the initially visible range, just click it directly
-      const itemY = dropdownConfig.firstItemY + (index * dropdownConfig.itemHeight);
-      await this.clickCanvas(dropdownConfig.itemX, itemY);
+      // Calculate click position based on where target item now appears
+      const positionInView = index - targetFirstVisible;
+      itemY = dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight);
+      logger.info(`After scroll, item ${index} at position ${positionInView}, clicking at Y=${itemY}`);
     }
 
+    // Draw debug indicator for click position
+    await this.drawDebugIndicator(dropdownConfig.itemX, itemY, `item ${index}`);
+
+    await this.clickCanvas(dropdownConfig.itemX, itemY);
     await this.delay(config.webvisu.delays.dropdownSelect);
+
     logger.info(`Light switch ${lightId} selected`);
   }
 
@@ -302,92 +464,117 @@ export class WebVisuController {
         throw new Error(`Unknown light switch: ${lightId}`);
       }
 
+      // Check if this is a dual-function switch
+      const switchInfo = lightSwitchById[lightId];
+      const hasDualFunction = !!(switchInfo as any)?.secondPress;
+      const switchName = lightSwitchNames[index] || lightId;
+
+      // Show status overlay
+      await this.page!.evaluate((text) => {
+        let overlay = document.getElementById('status-overlay');
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.id = 'status-overlay';
+          overlay.style.cssText = 'position:fixed; top:50px;left:80px;width:400px;height:30px;line-height:30px;background:white;color:black;padding:0 12px;font:14px monospace;text-align:center;border:2px solid black;z-index:99999;box-shadow:2px 2px 4px rgba(0,0,0,0.3);display:block;visibility:visible;opacity:1;';
+          document.body.appendChild(overlay);
+        }
+        overlay.textContent = `Reading: ${text}`;
+      }, switchName);
+
       // Select the light first (using internal non-queued method)
       await this.doSelectLightSwitch(lightId);
       await this.delay(config.webvisu.delays.statusRead);
 
-      // Check if this is a dual-function switch
-      const switchInfo = lightSwitchById[lightId];
-      const hasDualFunction = !!(switchInfo as any)?.secondPress;
+      // Read both status indicators directly from canvas in a single operation
+      const coords1 = uiCoordinates.lightSwitches.statusIndicator;
+      const coords2 = uiCoordinates.lightSwitches.statusIndicator2;
 
-      // Read the first status indicator
-      const isOn = await this.checkStatusIndicator(1);
+      const result = await this.page!.evaluate(({ x1, y1, x2, y2, readSecond }) => {
+        const canvas = document.getElementById('foreground') as HTMLCanvasElement;
+        if (!canvas) {
+          return { success: false, error: 'Canvas with id="foreground" not found' };
+        }
 
-      // Read the second status indicator for dual-function switches
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          return { success: false, error: 'Could not get canvas 2D context' };
+        }
+
+        const readPixel = (x: number, y: number) => {
+          const pixel = ctx.getImageData(x, y, 1, 1).data;
+          const r = pixel[0], g = pixel[1], b = pixel[2];
+
+          // Detect grey/loading screen: all RGB values are similar
+          const maxDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
+          const isGrey = maxDiff < 20;
+
+          // Detect near-black or near-white
+          const brightness = (r + g + b) / 3;
+          const isBlack = brightness < 30;
+          const isWhite = brightness > 240 && maxDiff < 20;
+
+          // Yellow detection: high green AND high red indicates ON
+          const isOn = g > 140 && r > 140;
+
+          return { r, g, b, isOn, isGrey, isBlack, isWhite };
+        };
+
+        const pixel1 = readPixel(x1, y1);
+        const pixel2 = readSecond ? readPixel(x2, y2) : null;
+
+        return { success: true, pixel1, pixel2 };
+      }, {
+        x1: coords1.x,
+        y1: coords1.y,
+        x2: coords2.x,
+        y2: coords2.y,
+        readSecond: hasDualFunction
+      });
+
+      if (!result.success) {
+        throw new Error(`Failed to read status indicators: ${result.error}`);
+      }
+
+      // Validate and log first indicator
+      const p1 = result.pixel1!;
+      logger.info(`Status indicator 1 at (${coords1.x}, ${coords1.y}): R=${p1.r} G=${p1.g} B=${p1.b} → isOn=${p1.isOn}`);
+
+      if (p1.isBlack) {
+        throw new Error(`Status indicator 1 shows near-black (R=${p1.r}, G=${p1.g}, B=${p1.b}) - page may not be rendered`);
+      }
+      if (p1.isWhite) {
+        throw new Error(`Status indicator 1 shows near-white (R=${p1.r}, G=${p1.g}, B=${p1.b}) - wrong area sampled`);
+      }
+      if (p1.isGrey) {
+        throw new Error(`Status indicator 1 shows grey (R=${p1.r}, G=${p1.g}, B=${p1.b}) - UI not fully loaded`);
+      }
+
+      // Validate and log second indicator if applicable
       let isOn2: boolean | undefined;
-      if (hasDualFunction) {
-        isOn2 = await this.checkStatusIndicator(2);
+      if (hasDualFunction && result.pixel2) {
+        const p2 = result.pixel2;
+        logger.info(`Status indicator 2 at (${coords2.x}, ${coords2.y}): R=${p2.r} G=${p2.g} B=${p2.b} → isOn=${p2.isOn}`);
+
+        if (p2.isBlack) {
+          throw new Error(`Status indicator 2 shows near-black (R=${p2.r}, G=${p2.g}, B=${p2.b}) - page may not be rendered`);
+        }
+        if (p2.isWhite) {
+          throw new Error(`Status indicator 2 shows near-white (R=${p2.r}, G=${p2.g}, B=${p2.b}) - wrong area sampled`);
+        }
+        if (p2.isGrey) {
+          throw new Error(`Status indicator 2 shows grey (R=${p2.r}, G=${p2.g}, B=${p2.b}) - UI not fully loaded`);
+        }
+
+        isOn2 = p2.isOn;
       }
 
       return {
         id: lightId,
         name: lightSwitchNames[index] || lightId,
-        isOn,
+        isOn: p1.isOn,
         ...(isOn2 !== undefined ? { isOn2 } : {}),
       };
     });
-  }
-
-  private async checkStatusIndicator(indicatorNumber: 1 | 2 = 1): Promise<boolean> {
-    this.ensureInitialized();
-
-    const coords = indicatorNumber === 2
-      ? uiCoordinates.lightSwitches.statusIndicator2
-      : uiCoordinates.lightSwitches.statusIndicator;
-
-    // Get the canvas bounding box to calculate absolute coordinates
-    const canvas = await this.page!.locator('canvas').first();
-    const box = await canvas.boundingBox();
-
-    if (!box) {
-      logger.warn('Could not get canvas bounding box');
-      return false;
-    }
-
-    // Take a screenshot and sample pixels from it (more reliable than canvas context)
-    const screenshot = await this.page!.screenshot({ type: 'png' });
-
-    // Calculate absolute page coordinates for the status indicator
-    const absX = Math.round(box.x + coords.x);
-    const absY = Math.round(box.y + coords.y);
-
-    // Use page.evaluate to decode PNG and read pixel at specific position
-    const result = await this.page!.evaluate(async ({ imageData, x, y }) => {
-      return new Promise<{ success: boolean; isOn: boolean; r: number; g: number; b: number; error?: string }>((resolve) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            resolve({ success: false, isOn: false, r: 0, g: 0, b: 0, error: 'Could not create canvas context' });
-            return;
-          }
-          ctx.drawImage(img, 0, 0);
-          const pixel = ctx.getImageData(x, y, 1, 1).data;
-          const r = pixel[0], g = pixel[1], b = pixel[2];
-
-          // Yellow detection: high green (>140) AND high red (>140) indicates ON
-          // Brown OFF has low green (<100)
-          const isOn = g > 140 && r > 140;
-
-          resolve({ success: true, isOn, r, g, b });
-        };
-        img.onerror = () => {
-          resolve({ success: false, isOn: false, r: 0, g: 0, b: 0, error: 'Failed to load image' });
-        };
-        img.src = `data:image/png;base64,${imageData}`;
-      });
-    }, { imageData: screenshot.toString('base64'), x: absX, y: absY });
-
-    if (result.success) {
-      logger.info(`Status indicator at page (${absX}, ${absY}) / canvas (${coords.x}, ${coords.y}): R=${result.r} G=${result.g} B=${result.b} → isOn=${result.isOn}`);
-    } else {
-      logger.warn(`Failed to read status indicator: ${result.error}`);
-    }
-
-    return result.isOn;
   }
 
   // Debug method to save a screenshot with indicator position marked
@@ -395,7 +582,7 @@ export class WebVisuController {
     this.ensureInitialized();
 
     const coords = uiCoordinates.lightSwitches.statusIndicator;
-    const canvas = await this.page!.locator('canvas').first();
+    const canvas = await this.page!.locator('canvas#foreground');
     const box = await canvas.boundingBox();
 
     const absX = box ? Math.round(box.x + coords.x) : coords.x;
