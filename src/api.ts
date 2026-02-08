@@ -1,11 +1,17 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { webVisuController } from './webvisu-controller';
+import { IWebVisuController } from './controller-interface';
 import { lightSwitches, lightSwitchNames, lightSwitchList, lightSwitchById } from './config';
 import { getAllCachedStatuses, upsertLightStatus } from './database';
 import { getPollingStatus } from './polling-service';
 import pino from 'pino';
 
 const logger = pino({ name: 'api' });
+
+let controller: IWebVisuController;
+
+export function setController(ctrl: IWebVisuController): void {
+  controller = ctrl;
+}
 
 export const app = express();
 app.use(express.json());
@@ -18,7 +24,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // Health check
 app.get('/health', async (req: Request, res: Response) => {
-  const connected = await webVisuController.isConnected();
+  const connected = await controller.isConnected();
   res.json({
     status: connected ? 'healthy' : 'degraded',
     webvisuConnected: connected,
@@ -82,7 +88,7 @@ app.get('/api/lights/:id', async (req: Request, res: Response) => {
   const hasDualFunction = !!(switchInfo as any)?.secondPress;
 
   try {
-    const status = await webVisuController.getLightStatus(id);
+    const status = await controller.getLightStatus(id);
 
     // Store the status in the database
     upsertLightStatus({
@@ -144,7 +150,7 @@ app.post('/api/lights/:id/toggle', async (req: Request, res: Response) => {
   }
 
   try {
-    await webVisuController.toggleLight(id, functionNumber as 1 | 2);
+    await controller.toggleLight(id, functionNumber as 1 | 2);
 
     const functionInfo = functionNumber === 2
       ? (switchInfo as any)?.secondPress
@@ -191,7 +197,7 @@ app.get('/api/polling/status', async (req: Request, res: Response) => {
 // Get all lights with their current status
 app.get('/api/lights/status/all', async (req: Request, res: Response) => {
   try {
-    const lights = await webVisuController.getAllLights();
+    const lights = await controller.getAllLights();
     res.json({
       lights,
       _links: {
@@ -207,7 +213,7 @@ app.get('/api/lights/status/all', async (req: Request, res: Response) => {
 // Debug endpoint: take a screenshot
 app.get('/api/debug/screenshot', async (req: Request, res: Response) => {
   try {
-    const screenshot = await webVisuController.takeScreenshot();
+    const screenshot = await controller.takeScreenshot();
     res.set('Content-Type', 'image/png');
     res.send(screenshot);
   } catch (error) {
@@ -216,10 +222,14 @@ app.get('/api/debug/screenshot', async (req: Request, res: Response) => {
   }
 });
 
-// Debug endpoint: get canvas info
+// Debug endpoint: get canvas info (Playwright only)
 app.get('/api/debug/canvas', async (req: Request, res: Response) => {
   try {
-    const canvasInfo = await webVisuController.getCanvasInfo();
+    if (!controller.getCanvasInfo) {
+      res.status(501).json({ error: 'Canvas info not available in protocol mode' });
+      return;
+    }
+    const canvasInfo = await controller.getCanvasInfo();
     res.json({
       canvas: canvasInfo,
       viewport: { width: 1280, height: 768 },
@@ -231,10 +241,14 @@ app.get('/api/debug/canvas', async (req: Request, res: Response) => {
   }
 });
 
-// Debug endpoint: check status indicator position and color
+// Debug endpoint: check status indicator position and color (Playwright only)
 app.get('/api/debug/status-indicator', async (req: Request, res: Response) => {
   try {
-    const debug = await webVisuController.debugStatusIndicator();
+    if (!controller.debugStatusIndicator) {
+      res.status(501).json({ error: 'Status indicator debug not available in protocol mode' });
+      return;
+    }
+    const debug = await controller.debugStatusIndicator();
     res.json({
       position: debug.position,
       color: debug.color,
@@ -261,7 +275,7 @@ app.post('/api/debug/navigate/:tab', async (req: Request, res: Response) => {
   }
 
   try {
-    await webVisuController.navigateToTab(tab as any);
+    await controller.navigateToTab(tab as any);
     res.json({ message: `Navigated to ${tab}` });
   } catch (error) {
     logger.error({ error, tab }, 'Error navigating to tab');

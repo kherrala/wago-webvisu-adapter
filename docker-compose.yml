@@ -11,7 +11,9 @@ services:
     environment:
       # Server port
       - PORT=8080
-      # Browser settings
+      # Controller mode: 'protocol' (default, no browser) or 'playwright' (browser automation)
+      - CONTROLLER=${CONTROLLER:-protocol}
+      # Browser settings (only used with CONTROLLER=playwright)
       - HEADLESS=true
       # Database settings
       - DB_PATH=/data/lights.db
@@ -21,8 +23,8 @@ services:
       - POLL_CYCLE_DELAY_MS=30000
     volumes:
       - wago-data:/data
-    # Required for Playwright to run in container
-    shm_size: '2gb'
+    # 2gb SHM for Playwright mode, 64mb is enough for protocol mode
+    shm_size: '${SHM_SIZE:-64m}'
     # Security options for Chrome
     security_opt:
       - seccomp:unconfined

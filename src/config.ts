@@ -7,13 +7,13 @@ export const config = {
     // Individual delays for each action type (in milliseconds)
     delays: {
       tabClick: 2000,           // After clicking a tab
-      dropdownOpen: 1500,       // After clicking dropdown arrow to open
-      dropdownScrollStart: 600, // After dragging scrollbar
-      dropdownScrollDrag: 1500,  // After dragging scrollbar
-      dropdownScrollStop: 600,  // After dragging scrollbar
+      dropdownOpen: 2000,       // After clicking dropdown arrow to open
+      dropdownScrollStart: 100, // After dragging scrollbar
+      dropdownScrollDrag: 300,  // After dragging scrollbar
+      dropdownScrollStop: 800,  // After dragging scrollbar
       dropdownSelect: 400,      // After clicking an item to select
       toggleButton: 0,          // After clicking Ohjaus button
-      statusRead: 400,            // Before reading status indicator
+      statusRead: 0,            // Before reading status indicator
     },
   },
   server: {
@@ -29,6 +29,20 @@ export const config = {
   polling: {
     enabled: process.env.POLLING_ENABLED !== 'false',
     cycleDelayMs: parseInt(process.env.POLL_CYCLE_DELAY_MS || '30000', 10),
+  },
+  protocol: {
+    host: process.env.PROTOCOL_HOST || '192.168.1.10',
+    requestTimeout: parseInt(process.env.PROTOCOL_TIMEOUT || '5000', 10),
+    reconnectDelay: 5000,
+    postClickDelay: 50,
+    postSelectDelay: 100,
+    debugHttp: process.env.PROTOCOL_DEBUG_HTTP === 'true',
+    sessionTraceEnabled: process.env.PROTOCOL_SESSION_TRACE !== 'false',
+    sessionTraceDir: process.env.PROTOCOL_SESSION_TRACE_DIR || './data/protocol-trace',
+    logRawFrameData: process.env.PROTOCOL_LOG_RAW_FRAME_DATA === 'true',
+    postDataInHeader: (process.env.PROTOCOL_POST_DATA_IN_HEADER as 'auto' | 'always' | 'never') || 'auto',
+    deviceUsername: process.env.PROTOCOL_DEVICE_USERNAME || '',
+    devicePassword: process.env.PROTOCOL_DEVICE_PASSWORD || '',
   },
 };
 
@@ -84,7 +98,7 @@ export const uiCoordinates = {
 // All 56 light switches in dropdown order (0-indexed)
 // ID format: lowercase with hyphens for URL-safe API access
 export const lightSwitchList = [
-  { id: '0', name: '0', firstPress: '', index: 0 },
+  { id: '0', name: '0', index: 0 },
   { id: 'kylpyhuone-1', name: 'Kylpyhuone 1', firstPress: 'Kylpyhuone alakerta', index: 1 },
   { id: 'kylpyhuone-2', name: 'Kylpyhuone 2', firstPress: 'Sauna laude LED', secondPress: 'Sauna siivousvalo', index: 2 },
   { id: 'wc-alakerta-1', name: 'WC alakerta 1', firstPress: 'WC alakerta kattovalo', index: 3 },
@@ -106,7 +120,7 @@ export const lightSwitchList = [
   { id: 'mh-1-1', name: 'MH 1/1', firstPress: 'Aikuisten makuuhuone kattovalo', index: 19 },
   { id: 'mh-1-2', name: 'MH 1/2', firstPress: 'Aikuisten makuuhuone ikkunavalo', index: 20 },
   { id: 'mh-1-vaatehuone', firstPress: 'Aikuisten makuuhuone', name: 'Aikuisten makuuhuone vaatehuone', index: 21 },
-  { id: '22', name: '22', firstPress: '', index: 22 },
+  { id: '22', name: '22', index: 22 },
   { id: 'kylpyhuone-yk-1', name: 'Kylpyhuone YK 1', firstPress: 'Kylpyhuone yläkerta kattovalo', index: 23 },
   { id: 'kylpyhuone-yk-2', name: 'Kylpyhuone YK 2', firstPress: 'Kylpyhuone yläkerta peilivalo', index: 24 },
   { id: 'porras-yk-1', name: 'Porras YK 1', firstPress: 'Yläkerran aula rappuset', index: 25 },
@@ -123,8 +137,8 @@ export const lightSwitchList = [
   { id: 'kellari-eteinen-2', name: 'Kellari eteinen 2', firstPress: 'Kellari varasto', index: 36 },
   { id: 'kellari-1', name: 'Kellari 1', firstPress: 'Kellari takaosa', secondPress: 'Kellari etuosa', index: 37 },
   { id: 'kellari-2', name: 'Kellari 2', firstPress: 'Kellari biljardipöytä', index: 38 },
-  { id: '39', name: '39', firstPress: '', index: 39 },
-  { id: '40', name: '40', firstPress: '', index: 40 },
+  { id: '39', name: '39', index: 39 },
+  { id: '40', name: '40', index: 40 },
   { id: 'saareke-1', name: 'Saareke 1', firstPress: 'Olohuone kattovalo 1', secondPress: 'Olohuone kattovalo 2', index: 41 },
   { id: 'saareke-2', name: 'Saareke 2', firstPress: 'Olohuone LED', index: 42 },
   { id: 'saareke-3', name: 'Saareke 3', firstPress: 'Olohuone ikkuna', index: 43 },
@@ -136,11 +150,11 @@ export const lightSwitchList = [
   { id: 'autokatos-1', name: 'Autokatos 1', firstPress: 'Sisäänkäynti', index: 49 },
   { id: 'autokatos-2', name: 'Autokatos 2', firstPress: 'Autokatos', index: 50 },
   { id: 'ulkovarasto', name: 'Ulkovarasto', firstPress: 'Ulkovarasto', index: 51 },
-  { id: '52', name: '52', firstPress: '', index: 52 },
-  { id: '53', name: '53', firstPress: '', index: 53 },
-  { id: '54', name: '54', firstPress: '', index: 54 },
-  { id: '55', name: '55', firstPress: '', index: 55 },
-  { id: '56', name: '56', firstPress: '', index: 56 },
+  { id: '52', name: '52', index: 52 },
+  { id: '53', name: '53', index: 53 },
+  { id: '54', name: '54', index: 54 },
+  { id: '55', name: '55', index: 55 },
+  { id: '56', name: '56', index: 56 },
 ];
 
 // Lookup maps for quick access

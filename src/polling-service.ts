@@ -1,7 +1,9 @@
 import { config, lightSwitchList, lightSwitchById } from './config';
-import { webVisuController } from './webvisu-controller';
+import { IWebVisuController } from './controller-interface';
 import { upsertLightStatus, setMetadata, getMetadata } from './database';
 import pino from 'pino';
+
+let controller: IWebVisuController;
 
 const logger = pino({ name: 'polling-service' });
 
@@ -59,7 +61,7 @@ async function pollLoop(): Promise<void> {
 
   while (!shouldStop) {
     // Wait if there are pending operations
-    const pendingOps = webVisuController.getPendingOperationCount();
+    const pendingOps = controller.getPendingOperationCount();
     if (pendingOps > 0) {
       logger.debug(`Waiting for ${pendingOps} pending operations to complete`);
       await delay(500);
@@ -72,7 +74,7 @@ async function pollLoop(): Promise<void> {
     try {
       logger.debug(`Polling light ${lightId} (${currentIndex + 1}/${pollableIds.length})`);
 
-      const status = await webVisuController.getLightStatus(lightId);
+      const status = await controller.getLightStatus(lightId);
 
       // Store in database
       upsertLightStatus({
@@ -110,6 +112,10 @@ async function pollLoop(): Promise<void> {
   }
 
   logger.info('Polling loop stopped');
+}
+
+export function setPollingController(ctrl: IWebVisuController): void {
+  controller = ctrl;
 }
 
 export function startPolling(): void {

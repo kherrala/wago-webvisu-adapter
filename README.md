@@ -69,6 +69,10 @@ curl http://localhost:8080/api/lights
 | `PORT` | `8080` | HTTP API server port |
 | `MCP_PORT` | `3002` | MCP SSE server port |
 | `HEADLESS` | `true` | Run browser in headless mode |
+| `PROTOCOL_DEBUG_HTTP` | `false` | Enable verbose protocol HTTP frame logs in app output |
+| `PROTOCOL_SESSION_TRACE` | `true` | Write per-session sent/received protocol frames to log files |
+| `PROTOCOL_SESSION_TRACE_DIR` | `./data/protocol-trace` | Directory for timestamped protocol session trace files |
+| `PROTOCOL_LOG_RAW_FRAME_DATA` | `false` | Include raw frame bytes (`bytesHex`) in protocol logs and trace files |
 
 The WebVisu URL is configured in `src/config.ts`:
 

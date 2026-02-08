@@ -1,8 +1,8 @@
-import { app } from './api';
-import { webVisuController } from './webvisu-controller';
+import { app, setController } from './api';
+import { IWebVisuController } from './controller-interface';
 import { config } from './config';
 import { initDatabase, closeDatabase } from './database';
-import { startPolling, stopPolling } from './polling-service';
+import { startPolling, stopPolling, setPollingController } from './polling-service';
 import pino from 'pino';
 
 const logger = pino({
@@ -13,14 +13,30 @@ const logger = pino({
   },
 });
 
+const controllerType = process.env.CONTROLLER || 'protocol';
+
+async function createController(): Promise<IWebVisuController> {
+  if (controllerType === 'playwright') {
+    logger.info('Using Playwright browser controller');
+    const { webVisuController } = await import('./webvisu-controller');
+    return webVisuController;
+  } else {
+    logger.info('Using direct protocol controller');
+    const { ProtocolController } = await import('./protocol-controller');
+    return new ProtocolController();
+  }
+}
+
 async function main() {
-  logger.info('Starting WAGO WebVisu Adapter...');
+  logger.info(`Starting WAGO WebVisu Adapter (controller: ${controllerType})...`);
+
+  const controller = await createController();
 
   // Handle graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down...`);
     stopPolling();
-    await webVisuController.close();
+    await controller.close();
     closeDatabase();
     process.exit(0);
   };
@@ -33,13 +49,17 @@ async function main() {
     logger.info('Initializing database...');
     initDatabase();
 
-    // Initialize the WebVisu controller (launches browser)
-    logger.info('Initializing WebVisu controller...');
-    await webVisuController.initialize();
+    // Wire up controller to API and polling service
+    setController(controller);
+    setPollingController(controller);
+
+    // Initialize the controller
+    logger.info('Initializing controller...');
+    await controller.initialize();
 
     // Navigate to the light switches tab by default
     logger.info('Navigating to light switches tab...');
-    await webVisuController.navigateToTab('napit');
+    await controller.navigateToTab('napit');
 
     // Start the HTTP API server
     app.listen(config.server.port, () => {
@@ -60,7 +80,7 @@ async function main() {
   } catch (error) {
     logger.error({ error }, 'Failed to start adapter');
     stopPolling();
-    await webVisuController.close();
+    await controller.close();
     closeDatabase();
     process.exit(1);
   }
