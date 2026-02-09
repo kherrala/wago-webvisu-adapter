@@ -2,16 +2,16 @@
 
 import { config, uiCoordinates, lightSwitches, lightSwitchNames, lightSwitchById, lightSwitchList } from './config';
 import { IWebVisuController, LightStatus } from './controller-interface';
-import { WebVisuProtocolClient } from './protocol/client';
-import { buildMouseDown, buildMouseUp, buildHeartbeat } from './protocol/messages';
+import { WebVisuProtocolClient, defaultProtocolConfig } from './protocol/client';
+import { buildHeartbeat, buildViewportEvent, buildStartVisuEvent } from './protocol/messages';
 import {
-  parsePaintCommands,
   extractStatusColors,
   extractStatusImages,
   extractDrawImages,
   extractTextLabels,
   determineStatus,
   determineStatusFromImages,
+  PaintCommand,
   ImageDrawCommand,
 } from './protocol/paint-commands';
 import pino from 'pino';
@@ -32,6 +32,10 @@ export class ProtocolController implements IWebVisuController {
   // Dropdown scroll tracking — same logic as WebVisuController
   private dropdownFirstVisible: number = 0;
   private dropdownStateUnknown: boolean = false;
+
+  private static readonly RENDER_IDLE_POLLS = 2;
+  private static readonly RENDER_POLL_INTERVAL_MS = 40;
+  private static readonly START_VISU_NAME = defaultProtocolConfig.startVisu;
 
   constructor() {
     this.client = new WebVisuProtocolClient({
@@ -65,11 +69,12 @@ export class ProtocolController implements IWebVisuController {
       throw e;
     }
 
-    // Match Playwright baseline: wait for initial visualization render.
-    await this.delay(config.webvisu.canvasRenderDelay);
-
-    // Send a heartbeat to get initial paint data
-    await this.client.heartbeat();
+    // Wait until backend paint stream goes idle instead of fixed startup delay.
+    await this.waitForRenderSettled('initialize', {
+      maxWaitMs: Math.max(2500, config.webvisu.canvasRenderDelay),
+      requireActivity: true,
+      idlePolls: 1,
+    });
 
     // Navigate to the Napit tab
     logger.info('Navigating to Napit tab...');
@@ -111,14 +116,26 @@ export class ProtocolController implements IWebVisuController {
       throw new Error(`Unknown tab: ${tabName}`);
     }
     if (tabName === 'napit') {
+      // First navigation right after handshake is sensitive to startup render timing.
+      // Wait for at least one backend paint activity burst before the first tab click.
+      if (!this.napitTabKnownActive && this.napitTabVerifiedAt === 0) {
+        const primed = await this.requestFullSnapshot('navigate:napit:prime');
+        if (primed.length === 0) {
+          await this.waitForRenderSettled('navigate:napit:prime-fallback', {
+            maxWaitMs: Math.max(2000, config.webvisu.canvasRenderDelay),
+            requireActivity: false,
+            idlePolls: 1,
+          });
+        }
+      }
       await this.ensureNapitTabActive(!this.napitTabKnownActive, 'navigateToTab');
       return;
     }
     logger.info(`Navigating to tab: ${tabName} at (${coords.x}, ${coords.y})`);
     await this.client.click(coords.x, coords.y);
-    await this.delay(config.webvisu.delays.tabClick);
-    // Send heartbeat to get updated paint
-    await this.client.heartbeat();
+    await this.waitForRenderSettled(`navigate:${tabName}`, {
+      maxWaitMs: Math.max(1000, config.webvisu.delays.tabClick + 1000),
+    });
     this.napitTabVerifiedAt = 0;
     this.napitTabKnownActive = false;
   }
@@ -130,7 +147,7 @@ export class ProtocolController implements IWebVisuController {
     });
   }
 
-  private async doSelectLightSwitch(lightId: string): Promise<void> {
+  private async doSelectLightSwitch(lightId: string): Promise<PaintCommand[]> {
     await this.ensureNapitTabActive(false, `select:${lightId}`);
 
     const index = lightSwitches[lightId];
@@ -145,7 +162,9 @@ export class ProtocolController implements IWebVisuController {
       uiCoordinates.lightSwitches.dropdownArrow.x,
       uiCoordinates.lightSwitches.dropdownArrow.y
     );
-    await this.delay(config.webvisu.delays.dropdownOpen);
+    await this.waitForRenderSettled(`dropdown-open:${lightId}`, {
+      maxWaitMs: Math.max(800, config.webvisu.delays.dropdownOpen + 800),
+    });
 
     const dropdownConfig = uiCoordinates.lightSwitches.dropdownList;
     const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
@@ -214,11 +233,13 @@ export class ProtocolController implements IWebVisuController {
 
     // Click the item
     await this.client.click(dropdownConfig.itemX, itemY);
-    await this.delay(config.webvisu.delays.dropdownSelect);
-    // Pull pending paint updates after selection (browser client has a continuous poll loop).
-    await this.client.heartbeat();
+    const selectionCommands = await this.waitForRenderAndCollect(`dropdown-select:${lightId}`, {
+      maxWaitMs: Math.max(800, config.webvisu.delays.dropdownSelect + 800),
+      requireActivity: true,
+    });
 
     logger.info(`Light switch ${lightId} selected`);
+    return selectionCommands;
   }
 
   /**
@@ -233,7 +254,6 @@ export class ProtocolController implements IWebVisuController {
 
     // Mouse down at start position
     await this.client.mouseDown(fromX, fromY);
-    await this.delay(config.webvisu.delays.dropdownScrollStart);
 
     // Send intermediate move events while dragging.
     const steps = 4;
@@ -242,12 +262,14 @@ export class ProtocolController implements IWebVisuController {
       const x = Math.round(fromX + (toX - fromX) * t);
       const y = Math.round(fromY + (toY - fromY) * t);
       await this.client.mouseMove(x, y);
-      await this.delay(Math.max(10, Math.floor(config.webvisu.delays.dropdownScrollDrag / steps)));
     }
 
     // Mouse up at target position (simulates drag)
     await this.client.mouseUp(toX, toY);
-    await this.delay(config.webvisu.delays.dropdownScrollStop);
+    await this.waitForRenderSettled('dropdown-drag', {
+      maxWaitMs: Math.max(1000, config.webvisu.delays.dropdownScrollStop + 1000),
+      requireActivity: true,
+    });
   }
 
   async toggleLight(lightId: string, functionNumber: 1 | 2 = 1): Promise<void> {
@@ -260,9 +282,10 @@ export class ProtocolController implements IWebVisuController {
 
       const ohjausButton = uiCoordinates.lightSwitches.ohjausButton;
       await this.client.click(ohjausButton.x, ohjausButton.y);
-      await this.delay(config.webvisu.delays.toggleButton);
-      // Pull post-toggle paint updates.
-      await this.client.heartbeat();
+      await this.waitForRenderSettled(`toggle:${lightId}`, {
+        maxWaitMs: Math.max(1000, config.webvisu.delays.toggleButton + 1000),
+        requireActivity: true,
+      });
 
       logger.info(`Light ${lightId} function ${functionNumber} toggled`);
     });
@@ -282,12 +305,18 @@ export class ProtocolController implements IWebVisuController {
       const switchName = lightSwitchNames[index] || lightId;
 
       // Select the light
-      await this.doSelectLightSwitch(lightId);
-      await this.delay(config.webvisu.delays.statusRead);
+      const selectionCommands = await this.doSelectLightSwitch(lightId);
 
-      // Send heartbeat and collect paint data to read status
-      const heartbeatBuf = buildHeartbeat(this.client.getClientId(), this.client.getSessionId());
-      let { allCommands } = await this.client.sendEventAndCollect(heartbeatBuf);
+      // Start with paint commands produced by selection itself.
+      let allCommands: PaintCommand[] = [...selectionCommands];
+      if (allCommands.length === 0) {
+        const preRollCommands = await this.waitForRenderAndCollect(`status-preroll:${lightId}`, {
+          maxWaitMs: Math.max(800, config.webvisu.delays.statusRead + 800),
+          requireActivity: false,
+          idlePolls: 1,
+        });
+        allCommands.push(...preRollCommands);
+      }
 
       // Extract status from paint commands
       const statusCoords1 = uiCoordinates.lightSwitches.statusIndicator;
@@ -302,10 +331,13 @@ export class ProtocolController implements IWebVisuController {
         tolerance: 15,
       });
       if (colors1.length === 0 && images1.length === 0) {
-        // If first poll has no indicator draw commands yet, wait and poll once more.
-        await this.delay(Math.max(100, config.webvisu.delays.statusRead));
-        const retry = await this.client.sendEventAndCollect(heartbeatBuf);
-        allCommands = retry.allCommands;
+        // Collect more backend paint deltas.
+        const retryCommands = await this.waitForRenderAndCollect(`status-retry:${lightId}`, {
+          maxWaitMs: 1500,
+          requireActivity: false,
+          idlePolls: 1,
+        });
+        allCommands.push(...retryCommands);
         colors1 = extractStatusColors(allCommands, {
           x: statusCoords1.x,
           y: statusCoords1.y,
@@ -317,6 +349,31 @@ export class ProtocolController implements IWebVisuController {
           tolerance: 15,
         });
         logger.info(`Status poll retry for ${lightId} indicator 1: images=${images1.length}, colors=${colors1.length}`);
+      }
+
+      if (colors1.length === 0 && images1.length === 0) {
+        // Force a redraw snapshot (viewport event) when incremental deltas do not include the indicator.
+        const viewportBuf = buildViewportEvent(
+          this.client.getClientId(),
+          config.browser.viewport.width,
+          config.browser.viewport.height,
+          1.0,
+          this.client.getSessionId()
+        );
+        const repaint = await this.client.sendEventAndCollect(viewportBuf);
+        allCommands.push(...repaint.allCommands);
+
+        colors1 = extractStatusColors(allCommands, {
+          x: statusCoords1.x,
+          y: statusCoords1.y,
+          tolerance: 15,
+        });
+        images1 = extractStatusImages(allCommands, {
+          x: statusCoords1.x,
+          y: statusCoords1.y,
+          tolerance: 15,
+        });
+        logger.info(`Status viewport refresh for ${lightId} indicator 1: images=${images1.length}, colors=${colors1.length}`);
       }
       const isOn1 = this.resolveImageBackedStatus(lightId, 1, images1) ?? determineStatusFromImages(images1) ?? determineStatus(colors1);
 
@@ -405,6 +462,103 @@ export class ProtocolController implements IWebVisuController {
     }
   }
 
+  private async waitForRenderAndCollect(
+    reason: string,
+    options: {
+      maxWaitMs?: number;
+      requireActivity?: boolean;
+      idlePolls?: number;
+      pollIntervalMs?: number;
+    } = {}
+  ): Promise<PaintCommand[]> {
+    const maxWaitMs = options.maxWaitMs ?? 2500;
+    const requireActivity = options.requireActivity ?? false;
+    const idlePolls = options.idlePolls ?? ProtocolController.RENDER_IDLE_POLLS;
+    const pollIntervalMs = options.pollIntervalMs ?? ProtocolController.RENDER_POLL_INTERVAL_MS;
+    const startedAt = Date.now();
+    const collected: PaintCommand[] = [];
+    let idleCount = 0;
+    let sawActivity = false;
+    let polls = 0;
+
+    while (Date.now() - startedAt < maxWaitMs) {
+      const heartbeatBuf = buildHeartbeat(this.client.getClientId(), this.client.getSessionId());
+      const { allCommands } = await this.client.sendEventAndCollect(heartbeatBuf);
+      polls++;
+
+      if (allCommands.length > 0) {
+        collected.push(...allCommands);
+        sawActivity = true;
+        idleCount = 0;
+      } else {
+        idleCount++;
+      }
+
+      if (idleCount >= idlePolls && (!requireActivity || sawActivity)) {
+        break;
+      }
+      await this.delay(pollIntervalMs);
+    }
+
+    logger.debug({
+      reason,
+      polls,
+      commandCount: collected.length,
+      settled: idleCount >= idlePolls,
+      sawActivity,
+      elapsedMs: Date.now() - startedAt,
+    }, 'Render settle wait completed');
+
+    return collected;
+  }
+
+  private async waitForRenderSettled(
+    reason: string,
+    options: {
+      maxWaitMs?: number;
+      requireActivity?: boolean;
+      idlePolls?: number;
+      pollIntervalMs?: number;
+    } = {}
+  ): Promise<void> {
+    await this.waitForRenderAndCollect(reason, options);
+  }
+
+  private async requestFullSnapshot(reason: string): Promise<PaintCommand[]> {
+    const viewportBuf = buildViewportEvent(
+      this.client.getClientId(),
+      config.browser.viewport.width,
+      config.browser.viewport.height,
+      1.0,
+      this.client.getSessionId()
+    );
+    const viewport = await this.client.sendEventAndCollect(viewportBuf);
+    if (viewport.allCommands.length > 0) {
+      logger.info({ reason, commandCount: viewport.allCommands.length }, 'Full snapshot via viewport event');
+      return viewport.allCommands;
+    }
+
+    const startVisuBuf = buildStartVisuEvent(
+      this.client.getClientId(),
+      ProtocolController.START_VISU_NAME,
+      this.client.getSessionId()
+    );
+    const startVisu = await this.client.sendEventAndCollect(startVisuBuf);
+    if (startVisu.allCommands.length > 0) {
+      logger.info({ reason, commandCount: startVisu.allCommands.length }, 'Full snapshot via StartVisu refresh');
+      return startVisu.allCommands;
+    }
+
+    const viewportRetry = await this.client.sendEventAndCollect(viewportBuf);
+    if (viewportRetry.allCommands.length > 0) {
+      logger.info({ reason, commandCount: viewportRetry.allCommands.length }, 'Full snapshot via viewport retry');
+      return viewportRetry.allCommands;
+    }
+
+    logger.warn({ reason }, 'Full snapshot refresh returned no paint commands');
+    return [];
+  }
+
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
@@ -459,11 +613,15 @@ export class ProtocolController implements IWebVisuController {
         const point = dynamic ?? staticClickPoints[Math.min(attempt - 1, staticClickPoints.length - 1)];
         logger.info({ reason, attempt, x: point.x, y: point.y, source: dynamic ? point.source : 'static' }, 'Ensuring Napit tab is active');
         await this.client.click(point.x, point.y);
-        await this.delay(config.webvisu.delays.tabClick);
       }
 
-      const heartbeatBuf = buildHeartbeat(this.client.getClientId(), this.client.getSessionId());
-      const { allCommands } = await this.client.sendEventAndCollect(heartbeatBuf);
+      let allCommands = await this.waitForRenderAndCollect(`napit-probe:${reason}:${attempt}`, {
+        maxWaitMs: Math.max(1000, config.webvisu.delays.tabClick + 1000),
+        requireActivity: shouldClick,
+      });
+      if (allCommands.length === 0) {
+        allCommands = await this.requestFullSnapshot(`napit-probe:${reason}:${attempt}`);
+      }
       const images = extractDrawImages(allCommands);
       if (images.length > 0) {
         sawAnyImages = true;
@@ -500,8 +658,6 @@ export class ProtocolController implements IWebVisuController {
         this.napitTabVerifiedAt = Date.now();
         return;
       }
-
-      await this.delay(Math.max(100, config.webvisu.delays.statusRead));
     }
     if (this.napitTabKnownActive && !sawAnyImages) {
       logger.warn({ reason }, 'Napit tab probe returned no paint updates; keeping previously verified active state');
