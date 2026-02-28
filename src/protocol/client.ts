@@ -165,6 +165,8 @@ export class WebVisuProtocolClient {
   private clientId: number = 0;
   private clientIp: string = '127.0.0.1';
   private connected: boolean = false;
+  private lastMouseX: number = -1;
+  private lastMouseY: number = -1;
   private config: ProtocolConfig;
   private agent: https.Agent;
   private sendShortPayloadInHeader: boolean = false;
@@ -359,6 +361,8 @@ export class WebVisuProtocolClient {
     this.openConnectionSessionId = 0;
     this.sessionId = this.config.initialServiceSessionId;
     this.clientId = 0;
+    this.lastMouseX = -1;
+    this.lastMouseY = -1;
     this.stopSessionTrace();
   }
 
@@ -371,8 +375,10 @@ export class WebVisuProtocolClient {
   async click(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
 
-    // Move first so controls that depend on hover/pointer tracking react like browser events.
-    await this.mouseMove(x, y);
+    // Skip mouseMove if already at the target position (saves ~1s HTTP round-trip).
+    if (x !== this.lastMouseX || y !== this.lastMouseY) {
+      await this.mouseMove(x, y);
+    }
 
     // MouseDown
     const downResp = await this.sendRaw(buildMouseDown(this.clientId, x, y, this.sessionId));
@@ -389,6 +395,8 @@ export class WebVisuProtocolClient {
   async mouseMove(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
     const resp = await this.sendRaw(buildMouseMove(this.clientId, x, y, this.sessionId));
+    this.lastMouseX = x;
+    this.lastMouseY = y;
     return this.handlePaintResponse(resp);
   }
 
@@ -484,14 +492,22 @@ export class WebVisuProtocolClient {
   private getPaintCommandName(commandId: number): string {
     const map: Record<number, string> = {
       0: 'Noop',
+      2: 'DrawPolygon',
       4: 'SetFillColor',
       5: 'SetPenStyle',
       6: 'SetFont',
       7: 'ClearRect',
+      8: 'SetClipRect',
+      9: 'RestoreClipRect',
+      18: 'SetDrawMode',
       19: 'DrawImage',
       23: 'Fill3DRect',
+      37: 'InitVisualization',
       42: 'TouchRectangles',
+      45: 'DrawPrimitive',
       46: 'DrawText',
+      48: 'Set3DStyle',
+      66: 'SetRenderParameter',
       72: 'CreateElement',
       73: 'UpdateElement',
       81: 'SetTransform',

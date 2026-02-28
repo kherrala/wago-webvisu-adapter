@@ -69,6 +69,8 @@ export class ProtocolController implements IWebVisuController {
   private lastStatusByIndicator = new Map<string, boolean>();
 
   constructor() {
+    const protocolHost = config.protocol?.host || '192.168.1.10';
+    const protocolPort = config.protocol?.port || 443;
     if (config.protocol?.debugRenderEnabled) {
       try {
         this.debugRenderer = new ProtocolDebugRenderer({
@@ -77,7 +79,16 @@ export class ProtocolController implements IWebVisuController {
           height: config.browser.viewport.height,
           maxFrames: config.protocol?.debugRenderMaxFrames ?? 400,
           minIntervalMs: config.protocol?.debugRenderMinIntervalMs ?? 0,
-          includeEmptyFrames: config.protocol?.debugRenderIncludeEmptyFrames ?? false,
+          includeEmptyFrames: config.protocol?.debugRenderIncludeEmptyFrames ?? true,
+          imageSource: {
+            enabled: config.protocol?.debugRenderFetchImages ?? true,
+            host: protocolHost,
+            port: protocolPort,
+            rejectUnauthorized: false,
+            referer: `https://${protocolHost}/webvisu/webvisu.htm`,
+            basePath: '/webvisu',
+            timeoutMs: config.protocol?.debugRenderImageFetchTimeoutMs ?? 1200,
+          },
         });
       } catch (error) {
         logger.warn({ error }, 'Failed to initialize protocol debug renderer; continuing without rendered screenshots');
@@ -86,7 +97,8 @@ export class ProtocolController implements IWebVisuController {
     }
 
     this.client = new WebVisuProtocolClient({
-      host: config.protocol?.host || '192.168.1.10',
+      host: protocolHost,
+      port: protocolPort,
       requestTimeout: config.protocol?.requestTimeout || 5000,
       reconnectDelay: config.protocol?.reconnectDelay || 5000,
       postClickDelay: config.protocol?.postClickDelay || 50,
@@ -213,6 +225,14 @@ export class ProtocolController implements IWebVisuController {
 
     logger.info(`Selecting light switch: ${lightId} (index: ${index}, attempt: ${selectionAttempt})`);
 
+    const preOpenDelayMs = Math.max(0, config.protocol?.dropdownPreOpenDelayMs ?? 200);
+    if (preOpenDelayMs > 0) await this.delay(preOpenDelayMs);
+    const preClickCommands = await this.forceRenderOnce(`pre-dropdown-open:${lightId}`);
+    if (this.detectKeypadDialog(preClickCommands)) {
+      await this.dismissKeypadDialog();
+      return retrySelection('Keypad dialog detected before dropdown open');
+    }
+
     await this.client.click(
       uiCoordinates.lightSwitches.dropdownArrow.x,
       uiCoordinates.lightSwitches.dropdownArrow.y
@@ -270,9 +290,19 @@ export class ProtocolController implements IWebVisuController {
     }
 
     const itemClickYOffset = config.protocol?.dropdownItemClickYOffset ?? 2;
-    const itemY = dynamicClickPoint
-      ? dynamicClickPoint.y + itemClickYOffset
-      : dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight) + itemClickYOffset;
+    let itemY: number;
+    if (dynamicClickPoint) {
+      const snapshotLabel = this.dropdownLastSnapshotLabels
+        .find(l => l.index === index && l.row === dynamicClickPoint.row);
+      const maxY = snapshotLabel ? snapshotLabel.bottom - 2 : Infinity;
+      itemY = Math.min(dynamicClickPoint.y + itemClickYOffset, maxY);
+    } else {
+      const rowBottomY = dropdownConfig.firstItemY + ((positionInView + 1) * dropdownConfig.itemHeight) - 2;
+      itemY = Math.min(
+        dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight) + itemClickYOffset,
+        rowBottomY,
+      );
+    }
     logger.info({
       lightId,
       index,
@@ -538,23 +568,41 @@ export class ProtocolController implements IWebVisuController {
       return Buffer.alloc(0);
     }
 
-    const latest = this.debugRenderer.getLatestPng();
-    if (latest) {
-      return latest;
-    }
+    let latest = this.debugRenderer.getLatestPng();
 
     if (!this.initialized) {
       logger.warn('takeScreenshot() requested before protocol controller initialization');
-      return Buffer.alloc(0);
+      return latest ?? Buffer.alloc(0);
     }
 
     try {
-      const commands = await this.forceRenderOnce('manual-screenshot');
-      return this.debugRenderer.renderPreview(commands);
+      const maxAttempts = 4;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const commands = await this.forceRenderOnce(`manual-screenshot:${attempt}`);
+        const rendered = await this.debugRenderer.renderPreview(commands);
+        latest = rendered;
+
+        if (commands.length > 0) {
+          return rendered;
+        }
+
+        if (attempt < maxAttempts) {
+          await this.delay(120);
+        }
+      }
+      return latest ?? Buffer.alloc(0);
     } catch (error) {
       logger.warn({ error }, 'Failed to generate protocol debug screenshot');
-      return Buffer.alloc(0);
+      return latest ?? Buffer.alloc(0);
     }
+  }
+
+  async getRenderedUiImage(): Promise<Buffer | null> {
+    if (!this.debugRenderer) {
+      return null;
+    }
+    const latest = this.debugRenderer.getLatestPng();
+    return latest ?? null;
   }
 
   async isConnected(): Promise<boolean> {
@@ -1115,6 +1163,11 @@ export class ProtocolController implements IWebVisuController {
       attempt++;
       const commands = await this.forceRenderOnce(`dropdown-open:${lightId}:${attempt}`);
       collected.push(...commands);
+      if (this.detectKeypadDialog(commands)) {
+        const elapsedMs = Date.now() - startedAt;
+        logger.warn({ lightId, attempts: attempt, elapsedMs }, 'Keypad dialog detected while waiting for dropdown');
+        return { commands: collected, detected: false, attempts: attempt, elapsedMs };
+      }
       const detected = this.syncDropdownStateFromCommands(commands, `dropdown-open:${lightId}:attempt:${attempt}`);
       if (detected) {
         const elapsedMs = Date.now() - startedAt;
@@ -1273,6 +1326,26 @@ export class ProtocolController implements IWebVisuController {
       if (id === LAMP_IMAGE_OFF) return false;
     }
     return null;
+  }
+
+  private detectKeypadDialog(commands: PaintCommand[]): boolean {
+    const labels = extractTextLabels(commands);
+    const texts = new Set(labels.map(l => l.text.replace(/\x00+$/g, '').trim()));
+    let digitCount = 0;
+    for (let d = 0; d <= 9; d++) {
+      if (texts.has(String(d))) digitCount++;
+    }
+    return digitCount >= 8 && texts.has('ESC');
+  }
+
+  private async dismissKeypadDialog(): Promise<void> {
+    const escButton = uiCoordinates.lightSwitches.keypadEscButton;
+    logger.warn({ x: escButton.x, y: escButton.y }, 'Keypad dialog detected — clicking ESC to dismiss');
+    await this.client.click(escButton.x, escButton.y);
+    await this.delay(200);
+    await this.forceRenderOnce('keypad-dismiss-settle');
+    this.dropdownStateUnknown = true;
+    this.napitTabKnownActive = false;
   }
 
   private async forceRenderOnce(reason: string): Promise<PaintCommand[]> {

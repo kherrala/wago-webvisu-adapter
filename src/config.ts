@@ -32,9 +32,11 @@ export const config = {
   },
   protocol: {
     host: process.env.PROTOCOL_HOST || '192.168.1.10',
+    port: parseInt(process.env.PROTOCOL_PORT || '443', 10),
     requestTimeout: parseInt(process.env.PROTOCOL_TIMEOUT || '5000', 10),
     initialRenderTimeoutMs: parseInt(process.env.PROTOCOL_INITIAL_RENDER_TIMEOUT_MS || '7000', 10),
     initialRenderPollIntervalMs: parseInt(process.env.PROTOCOL_INITIAL_RENDER_POLL_INTERVAL_MS || '200', 10),
+    dropdownPreOpenDelayMs: parseInt(process.env.PROTOCOL_DROPDOWN_PRE_OPEN_DELAY_MS || '200', 10),
     dropdownOpenTimeoutMs: parseInt(process.env.PROTOCOL_DROPDOWN_OPEN_TIMEOUT_MS || '6000', 10),
     dropdownOpenPollIntervalMs: parseInt(process.env.PROTOCOL_DROPDOWN_OPEN_POLL_INTERVAL_MS || '180', 10),
     dropdownScrollTimeoutMs: parseInt(process.env.PROTOCOL_DROPDOWN_SCROLL_TIMEOUT_MS || '5000', 10),
@@ -67,6 +69,8 @@ export const config = {
     debugRenderMaxFrames: parseInt(process.env.PROTOCOL_DEBUG_RENDER_MAX_FRAMES || '400', 10),
     debugRenderMinIntervalMs: parseInt(process.env.PROTOCOL_DEBUG_RENDER_MIN_INTERVAL_MS || '0', 10),
     debugRenderIncludeEmptyFrames: process.env.PROTOCOL_DEBUG_RENDER_INCLUDE_EMPTY !== 'false',
+    debugRenderFetchImages: process.env.PROTOCOL_DEBUG_RENDER_FETCH_IMAGES !== 'false',
+    debugRenderImageFetchTimeoutMs: parseInt(process.env.PROTOCOL_DEBUG_RENDER_IMAGE_FETCH_TIMEOUT_MS || '1200', 10),
     postDataInHeader: (process.env.PROTOCOL_POST_DATA_IN_HEADER as 'auto' | 'always' | 'never') || 'auto',
     deviceUsername: process.env.PROTOCOL_DEVICE_USERNAME || '',
     devicePassword: process.env.PROTOCOL_DEVICE_PASSWORD || '',
@@ -113,6 +117,8 @@ export const uiCoordinates = {
       // X position for clicking items (center of dropdown list)
       itemX: 290,
     },
+    // ESC button on the CoDeSys numeric keypad dialog (used for dismissal)
+    keypadEscButton: { x: 714, y: 583 },
     // Scrollbar for dropdown (when open) - on right edge of dropdown list
     scrollbar: {
       x: 528,
