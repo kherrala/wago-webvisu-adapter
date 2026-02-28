@@ -38,7 +38,7 @@ export class ProtocolController implements IWebVisuController {
   private static readonly DEFAULT_DROPDOWN_OPEN_TIMEOUT_MS = 4000;
   private static readonly MIN_DROPDOWN_OPEN_POLL_INTERVAL_MS = 50;
   private static readonly DEFAULT_DROPDOWN_OPEN_POLL_INTERVAL_MS = 180;
-  private static readonly MIN_SELECTION_VERIFY_TIMEOUT_MS = 200;
+  private static readonly MIN_SELECTION_VERIFY_TIMEOUT_MS = 0;
   private static readonly DEFAULT_SELECTION_VERIFY_TIMEOUT_MS = 2500;
   private static readonly MIN_SELECTION_VERIFY_POLL_INTERVAL_MS = 50;
   private static readonly DEFAULT_SELECTION_VERIFY_POLL_INTERVAL_MS = 120;
@@ -225,21 +225,18 @@ export class ProtocolController implements IWebVisuController {
 
     logger.info(`Selecting light switch: ${lightId} (index: ${index}, attempt: ${selectionAttempt})`);
 
-    const preOpenDelayMs = Math.max(0, config.protocol?.dropdownPreOpenDelayMs ?? 200);
-    if (preOpenDelayMs > 0) await this.delay(preOpenDelayMs);
-    const preClickCommands = await this.forceRenderOnce(`pre-dropdown-open:${lightId}`);
-    if (this.detectKeypadDialog(preClickCommands)) {
-      await this.dismissKeypadDialog();
-      return retrySelection('Keypad dialog detected before dropdown open');
-    }
-
-    await this.client.click(
+    const clickPaint = await this.client.click(
       uiCoordinates.lightSwitches.dropdownArrow.x,
       uiCoordinates.lightSwitches.dropdownArrow.y
     );
-    const dropdownOpen = await this.waitForDropdownOpen(lightId);
+    const clickSeedCommands = this.parseCommandsFromPaintResponse(clickPaint);
+    const dropdownOpen = await this.waitForDropdownOpen(lightId, clickSeedCommands);
     const dropdownOpenCommands = [...dropdownOpen.commands];
     if (!dropdownOpen.detected) {
+      if (this.detectKeypadDialog(dropdownOpenCommands)) {
+        await this.dismissKeypadDialog();
+        return retrySelection('Keypad dialog detected during dropdown open');
+      }
       return retrySelection('Dropdown open render not detected');
     }
     this.syncDropdownStateFromCommands(dropdownOpenCommands, `dropdown-open:${lightId}`);
@@ -267,9 +264,6 @@ export class ProtocolController implements IWebVisuController {
         synced = this.syncDropdownStateFromCommands(probeCommands, `dropdown-reset-probe:${lightId}:${probe}`) || synced;
         if (synced && this.dropdownFirstVisible <= 0) {
           break;
-        }
-        if (probe < 3) {
-          await this.delay(100);
         }
       }
     }
@@ -315,11 +309,11 @@ export class ProtocolController implements IWebVisuController {
     const selectPaint = await this.client.click(dropdownConfig.itemX, itemY);
     const selectCommands = this.parseCommandsFromPaintResponse(selectPaint);
     const selectionCommands = await this.forceRenderOnce(`dropdown-select:${lightId}`);
-    if (usedScrollbarDrag || selectionSettleDelayMs > 0) {
+    if (selectionSettleDelayMs > 0) {
       await this.delay(selectionSettleDelayMs);
-      const settledCommands = await this.forceRenderOnce(`dropdown-select-settle:${lightId}`);
-      selectionCommands.push(...settledCommands);
     }
+    const settledCommands = await this.forceRenderOnce(`dropdown-select-settle:${lightId}`);
+    selectionCommands.push(...settledCommands);
 
     const verificationSeed = [
       ...selectCommands,
@@ -586,9 +580,6 @@ export class ProtocolController implements IWebVisuController {
           return rendered;
         }
 
-        if (attempt < maxAttempts) {
-          await this.delay(120);
-        }
       }
       return latest ?? Buffer.alloc(0);
     } catch (error) {
@@ -800,9 +791,6 @@ export class ProtocolController implements IWebVisuController {
           return { visible: true, commands, usedDrag };
         }
 
-        if (probe < 3) {
-          await this.delay(80);
-        }
       }
 
       const remainingMs = deadline - Date.now();
@@ -932,7 +920,6 @@ export class ProtocolController implements IWebVisuController {
     const expectedLabel = this.getExpectedLightLabel(lightId, index);
     const expectedFirstPress = lightSwitchById[lightId]?.firstPress ?? null;
     const startedAt = Date.now();
-    const deadline = startedAt + timeoutMs;
     const commands: PaintCommand[] = [...seedCommands];
     let attempts = 0;
     let headerText = this.extractDropdownHeaderText(seedCommands);
@@ -947,6 +934,19 @@ export class ProtocolController implements IWebVisuController {
       return this.doesDropdownHeaderMatchExpected(firstPressText, expectedFirstPress);
     };
 
+    // If timeout is 0, skip polling — just check the seed.
+    if (timeoutMs <= 0) {
+      return {
+        ok: isMatch(),
+        headerText,
+        firstPressText,
+        commands,
+        attempts: 0,
+        elapsedMs: 0,
+      };
+    }
+
+    const deadline = startedAt + timeoutMs;
     while (!isMatch() && Date.now() <= deadline) {
       attempts++;
       const forced = await this.forceRenderOnce(`dropdown-verify:${lightId}:${attempts}`);
@@ -1139,7 +1139,7 @@ export class ProtocolController implements IWebVisuController {
     return true;
   }
 
-  private async waitForDropdownOpen(lightId: string): Promise<{
+  private async waitForDropdownOpen(lightId: string, clickSeedCommands?: PaintCommand[]): Promise<{
     commands: PaintCommand[];
     detected: boolean;
     attempts: number;
@@ -1158,6 +1158,13 @@ export class ProtocolController implements IWebVisuController {
     const deadline = startedAt + timeoutMs;
     const collected: PaintCommand[] = [];
     let attempt = 0;
+
+    // Include click response commands in collected data (for downstream use)
+    // but don't use them for dropdown detection — the mouseUp response may
+    // contain pre-dropdown labels that cause false matches.
+    if (clickSeedCommands && clickSeedCommands.length > 0) {
+      collected.push(...clickSeedCommands);
+    }
 
     while (Date.now() <= deadline) {
       attempt++;
@@ -1195,8 +1202,8 @@ export class ProtocolController implements IWebVisuController {
 
   private async collectStatusCommands(lightId: string, seedCommands: PaintCommand[]): Promise<PaintCommand[]> {
     const allCommands = [...seedCommands];
-    const maxAttempts = Math.max(1, config.protocol?.statusMaxAttempts ?? 6);
-    const pollDelayMs = Math.max(0, config.protocol?.statusPollDelayMs ?? 200);
+    const maxAttempts = Math.max(1, config.protocol?.statusMaxAttempts ?? 3);
+    const pollDelayMs = Math.max(0, config.protocol?.statusPollDelayMs ?? 0);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const indicators = this.resolveIndicatorImages(allCommands);
@@ -1210,6 +1217,23 @@ export class ProtocolController implements IWebVisuController {
 
       const moreCommands = await this.forceRenderOnce(`status:${lightId}:${attempt}`);
       allCommands.push(...moreCommands);
+
+      // If we got a full render (many commands) but still missing indicators,
+      // the PLC simply doesn't have all 3 for this switch — stop polling.
+      if (moreCommands.length >= 100) {
+        const postPollIndicators = this.resolveIndicatorImages(allCommands);
+        const postReady =
+          postPollIndicators.indicator1.length > 0 &&
+          postPollIndicators.indicator2.length > 0 &&
+          postPollIndicators.indicator3.length > 0;
+        if (postReady) {
+          return allCommands;
+        }
+        logger.debug({ lightId, attempt, commandCount: moreCommands.length },
+          'Full render received but not all indicators found; accepting partial status');
+        return allCommands;
+      }
+
       if (attempt < maxAttempts && pollDelayMs > 0) {
         await this.delay(pollDelayMs);
       }
@@ -1221,7 +1245,7 @@ export class ProtocolController implements IWebVisuController {
   private collectLampImages(commands: PaintCommand[]): ImageDrawCommand[] {
     return extractDrawImages(commands)
       .filter((image) => this.isLampStatusImageId(image.imageId))
-      .slice(-12);
+      .slice(-36);
   }
 
   private isPlausibleLampGeometry(image: ImageDrawCommand): boolean {
@@ -1342,7 +1366,6 @@ export class ProtocolController implements IWebVisuController {
     const escButton = uiCoordinates.lightSwitches.keypadEscButton;
     logger.warn({ x: escButton.x, y: escButton.y }, 'Keypad dialog detected — clicking ESC to dismiss');
     await this.client.click(escButton.x, escButton.y);
-    await this.delay(200);
     await this.forceRenderOnce('keypad-dismiss-settle');
     this.dropdownStateUnknown = true;
     this.napitTabKnownActive = false;
@@ -1444,9 +1467,6 @@ export class ProtocolController implements IWebVisuController {
           return;
         }
 
-        if (probe < 3) {
-          await this.delay(120);
-        }
       }
     }
 

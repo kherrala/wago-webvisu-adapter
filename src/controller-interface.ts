@@ -16,6 +16,7 @@ export interface IWebVisuController {
   getAllLights(): Promise<LightStatus[]>;
   navigateToTab(tabName: string): Promise<void>;
   takeScreenshot(): Promise<Buffer>;
+  getRenderedUiImage?(): Promise<Buffer | null>;
   isConnected(): Promise<boolean>;
   getPendingOperationCount(): number;
   resetDropdownState(): void;

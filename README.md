@@ -69,6 +69,7 @@ curl http://localhost:8080/api/lights
 | `PORT` | `8080` | HTTP API server port |
 | `MCP_PORT` | `3002` | MCP SSE server port |
 | `HEADLESS` | `true` | Run browser in headless mode |
+| `PROTOCOL_PORT` | `443` | PLC HTTPS port for protocol and debug image fetching |
 | `PROTOCOL_DEBUG_HTTP` | `false` | Enable verbose protocol HTTP frame logs in app output |
 | `PROTOCOL_SESSION_TRACE` | `true` | Write per-session sent/received protocol frames to log files |
 | `PROTOCOL_SESSION_TRACE_DIR` | `./data/protocol-trace` | Directory for timestamped protocol session trace files |
@@ -78,6 +79,8 @@ curl http://localhost:8080/api/lights
 | `PROTOCOL_DEBUG_RENDER_MAX_FRAMES` | `400` | Maximum number of rendered frames per session |
 | `PROTOCOL_DEBUG_RENDER_MIN_INTERVAL_MS` | `0` | Minimum interval between rendered frames (0 = capture all) |
 | `PROTOCOL_DEBUG_RENDER_INCLUDE_EMPTY` | `true` | Persist empty paint responses too (useful for timing analysis gaps) |
+| `PROTOCOL_DEBUG_RENDER_FETCH_IMAGES` | `true` | Try to fetch actual image assets from PLC (`/ImageByImagePoolId` + image pool CSV) |
+| `PROTOCOL_DEBUG_RENDER_IMAGE_FETCH_TIMEOUT_MS` | `1200` | Timeout per remote image fetch request |
 
 The WebVisu URL is configured in `src/config.ts`:
 
@@ -159,6 +162,13 @@ curl -X POST http://localhost:8080/api/lights/kylpyhuone-2/toggle?function=2
 curl http://localhost:8080/api/debug/screenshot > screenshot.png
 ```
 
+### Debug: View Rendered UI Image
+```bash
+curl http://localhost:8080/api/debug/rendered-ui > rendered-ui.png
+```
+
+`/api/debug/rendered-ui` returns the latest cumulative rendered frame already cached in server memory. It does not trigger a new render request.
+
 In protocol mode, `takeScreenshot` uses the command renderer when `PROTOCOL_DEBUG_RENDER=true`.
 Rendered debug frames are saved automatically into timestamped session folders:
 
@@ -171,7 +181,9 @@ Each captured frame writes:
 - `frame-....json`: timing + request/response metadata for that frame
 - `timeline.ndjson`: append-only timeline for quick sequence analysis
 
-Note: protocol rendering is diagnostic and stateful (applies command deltas over time), but it is still an approximation of the browser canvas.
+Protocol debug rendering keeps a cumulative canvas and tries to fetch real image assets from the PLC image pool (`/ImageByImagePoolId` and `application.imagepoolcollection.csv`) so DrawImage commands can be painted closer to browser output.
+
+Reverse-engineered command mapping and draw behavior notes are documented in `reverse-engineering/DRAW_COMMANDS.md`.
 
 ## Claude Desktop Integration (MCP)
 

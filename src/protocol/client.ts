@@ -139,7 +139,7 @@ export const defaultProtocolConfig: ProtocolConfig = {
   viewportHeight: 1024,
   requestTimeout: 5000,
   reconnectDelay: 5000,
-  postClickDelay: 50,
+  postClickDelay: 0,
   postSelectDelay: 100,
   registrationPollInterval: 100,
   registrationMaxAttempts: 50,

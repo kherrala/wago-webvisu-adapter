@@ -16,16 +16,22 @@
     "docker:logs": "docker-compose logs -f"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "better-sqlite3": "^11.0.0",
+    "dotenv": "^17.3.1",
     "express": "^4.18.2",
-    "playwright": "^1.40.0",
+    "jpeg-js": "^0.4.4",
     "pino": "^8.16.0",
-    "pino-pretty": "^10.2.3"
+    "pino-pretty": "^10.2.3",
+    "playwright": "^1.40.0",
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.8",
     "@types/express": "^4.17.21",
+    "@types/jpeg-js": "^0.3.0",
     "@types/node": "^20.10.0",
+    "@types/pngjs": "^6.0.5",
     "ts-node": "^10.9.1",
     "typescript": "^5.3.2"
   }

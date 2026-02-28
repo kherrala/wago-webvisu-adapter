@@ -230,124 +230,27 @@ Cyclic GetPaintData requests. Each cycle either:
 - Sends a queued user event (mouse click, key press), or
 - Sends a heartbeat: event tag `1`, clientId, x=0, y=0
 
-## Event Message Format (GetPaintData Request)
+## GetPaintData — Event & Paint Exchange (Group 4, ID 4)
 
-Events are sent inside GetPaintData (group 4, id 4). The request wraps the event in TLV tag 132:
+GetPaintData is the main data exchange service. The client sends input events (mouse, keyboard, control) and receives paint commands to render the visualization. See **[PAINT-COMMANDS.md](PAINT-COMMANDS.md)** for full details on:
 
-### Event TLV Structure (inside tag 132)
-
-```
-Tag 1 (16 bytes):
-  Uint32: eventTag
-  Uint32: param1
-  Uint32: param2
-  Uint32: clientId (externId)
-
-[Optional] Tag 2: extra data buffer
-  If scale info present: Uint32 scaleKb, Uint32 scaleZb
-  Then: raw extra data bytes
-
-[Optional] Tag 3 (8 bytes): clipping rectangle
-  Uint16: left
-  Uint16: top
-  Uint16: right
-  Uint16: bottom
-
-[Optional] Tag 5 (8 bytes): scale info
-  Uint32: kb
-  Uint32: zb
-```
-
-### Event Tags
-
-| Tag | Name | param1 | param2 |
-|-----|------|--------|--------|
-| 1 | Heartbeat | 0 | 0 |
-| 2 | MouseDown | packedPoint(X,Y) | 0 |
-| 4 | MouseUp | packedPoint(X,Y) | 0 |
-| 16 | MouseMove | packedPoint(X,Y) | 0 |
-| 128 | KeyDown | keyCode | modifierFlags |
-| 256 | KeyUp | keyCode | modifierFlags |
-| 257 | KeyPress | charCode | 0 |
-| 516 | ViewportInfo | viewportFlags | 0 |
-| 1048576 | Control | sub-command | 0 |
-| 4096 | MouseOut | — | — |
-
-**Modifier flags for keyboard events:** shift=1, alt=2, ctrl=4 (bitwise OR).
-
-`packedPoint(X,Y)` is encoded exactly like `webvisu.js` `w.Yc()`:
-- high 16 bits = X
-- low 16 bits = Y
-- both truncated to unsigned 16-bit.
-
-**Coordinate system:** Canvas pixel coordinates, origin at top-left. For a 1280x1024 viewport, X ranges 0-1279, Y ranges 0-1023.
+- Event header format and event tag catalog (mouse, keyboard, viewport, control events)
+- Coordinate packing for mouse events
+- Paint data response format (TLV structure, error codes)
+- Paint command stream framing and the full 100+ command catalog
+- Continuation protocol for large responses
+- Rendering state machine
 
 ### How to Click a Button
 
 To simulate a button click at coordinates (x, y):
 
-1. Send GetPaintData with mousedown event (tag=2, x, y, clientId)
+1. Send GetPaintData with mousedown event (tag=2, packed x/y, clientId)
 2. Wait for response (parse paint commands)
-3. Send GetPaintData with mouseup event (tag=4, x, y, clientId)
+3. Send GetPaintData with mouseup event (tag=4, packed x/y, clientId)
 4. Wait for response (parse paint commands with updated state)
 
-## Paint Data Response Format
-
-Response to GetPaintData (group 0x84, id 4):
-
-### Top-level TLVs
-
-- **Tag 132** (or 129 for new-style): Container for paint data
-  - **Tag 1**: `Uint32` error code
-    - `0`: Success
-    - `65535`: "Client id not present or no longer valid"
-  - **Tag 2**: Paint header
-    - `Uint32`: unused
-    - `Uint32`: command count
-    - `Uint32`: total data size
-    - `Uint32`: continuation token (0 = complete, >0 = more data follows)
-  - **Tag 3**: Raw paint command data
-  - **Tag 4**: Finish marker (0 continuation remaining)
-- **Tag 34**: `Uint32` session info
-
-### Paint Commands
-
-The raw data in Tag 3 is a sequence of paint commands:
-```
-For each command:
-  Uint32: commandSize (total bytes including this field)
-  Uint32: commandId (index into command table)
-  Bytes:  command-specific data (commandSize - 8 bytes)
-```
-
-There are 100+ paint command types. Key ones for light status detection:
-
-| ID | Name | Description |
-|----|------|-------------|
-| 0 | Noop | No operation |
-| 4 | SetFillColor | Sets fill color (ARGB uint32) |
-| 5 | SetPenStyle | Line style, color, width |
-| 6 | SetFont | Font color, size, name |
-| 7 | ClearRect | Clear/fill rectangle area |
-| 19 | DrawImage | Image with position and flags |
-| 23 | Fill3DRect | 3D-style filled rectangle with border colors |
-| 42 | TouchRectangles | Defines interactive touch/click regions |
-| 72 | CreateElement | DOM element creation |
-| 73 | UpdateElement | Position/size/rotation update |
-| 81 | SetTransform | Affine transform matrix |
-| 93 | ClearRectAndClip | Clear rect + set clip |
-
-### Continuation Handling
-
-If the paint data is too large for one response (exceeds CommBufferSize), the response includes a non-zero continuation token. The client must send a follow-up request:
-
-```
-GetPaintData with:
-  Tag 132 containing:
-    Tag 4: Uint32 continuation token
-```
-
-This repeats until a response with continuation=0 (finish) is received.
+**Coordinate system:** Canvas pixel coordinates, origin at top-left. For a 1280x1024 viewport, X ranges 0-1279, Y ranges 0-1023.
 
 ## Session Teardown
 

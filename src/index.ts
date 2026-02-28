@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { app, setController } from './api';
 import { IWebVisuController } from './controller-interface';
 import { config } from './config';
@@ -68,6 +69,7 @@ async function main() {
       logger.info(`  POST http://localhost:${config.server.port}/api/lights/:id/toggle`);
       logger.info(`  GET  http://localhost:${config.server.port}/api/polling/status`);
       logger.info(`  GET  http://localhost:${config.server.port}/api/debug/screenshot`);
+      logger.info(`  GET  http://localhost:${config.server.port}/api/debug/rendered-ui`);
       logger.info('');
 
       // Start background polling service after server is ready

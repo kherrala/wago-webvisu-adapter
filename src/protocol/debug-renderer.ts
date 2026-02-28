@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import https from 'https';
 import path from 'path';
@@ -139,6 +140,8 @@ export class ProtocolDebugRenderer {
   private maxFrameWarningShown = false;
   private lastCapturedAtMs = 0;
   private latestPng: Buffer | null = null;
+  private lastPersistedPngHash: string | null = null;
+  private skippedDuplicateFrames = 0;
   private closed = false;
 
   constructor(options: ProtocolDebugRendererOptions) {
@@ -265,6 +268,7 @@ export class ProtocolDebugRenderer {
       finishedAt: new Date().toISOString(),
       capturedFrames: this.frameCount,
       droppedFrames: this.droppedFrames,
+      skippedDuplicateFrames: this.skippedDuplicateFrames,
       latestFrameAvailable: this.latestPng !== null,
     };
     try {
@@ -282,6 +286,14 @@ export class ProtocolDebugRenderer {
       frame.requestEvent ? { x: frame.requestEvent.x, y: frame.requestEvent.y } : undefined,
     );
     this.latestPng = Buffer.from(png);
+
+    // Skip writing frames identical to the previous persisted frame.
+    const pngHash = crypto.createHash('md5').update(png).digest('hex');
+    if (pngHash === this.lastPersistedPngHash) {
+      this.skippedDuplicateFrames++;
+      return;
+    }
+    this.lastPersistedPngHash = pngHash;
 
     const baseName = this.buildFrameBaseName(index, frame);
     const pngPath = path.join(this.sessionDir, `${baseName}.png`);

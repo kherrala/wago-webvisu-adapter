@@ -215,10 +215,33 @@ app.get('/api/debug/screenshot', async (req: Request, res: Response) => {
   try {
     const screenshot = await controller.takeScreenshot();
     res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'no-store');
     res.send(screenshot);
   } catch (error) {
     logger.error({ error }, 'Error taking screenshot');
     res.status(500).json({ error: 'Failed to take screenshot' });
+  }
+});
+
+// Debug endpoint: get rendered UI image (protocol renderer output)
+app.get('/api/debug/rendered-ui', async (req: Request, res: Response) => {
+  try {
+    if (!controller.getRenderedUiImage) {
+      res.status(501).json({ error: 'Rendered UI cache is not available for this controller mode' });
+      return;
+    }
+    const screenshot = await controller.getRenderedUiImage();
+    if (!screenshot || screenshot.length === 0) {
+      res.status(503).json({ error: 'Rendered UI image is not available yet' });
+      return;
+    }
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Rendered-Source', 'memory-cache');
+    res.send(screenshot);
+  } catch (error) {
+    logger.error({ error }, 'Error getting rendered UI image');
+    res.status(500).json({ error: 'Failed to get rendered UI image' });
   }
 });
 
