@@ -87,7 +87,9 @@ export function extractColorCommands(commands: PaintCommand[]): ColorCommand[] {
   for (const cmd of commands) {
     if (cmd.id === CMD_SET_FILL_COLOR && cmd.data.length >= 4) {
       const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
-      const argb = dv.getUint32(0, true);
+      // SetFillColor format: flags(4) + argb(4). ARGB is at offset 4 when 8+ bytes present;
+      // fall back to offset 0 for legacy 4-byte payloads.
+      const argb = cmd.data.length >= 8 ? dv.getUint32(4, true) : dv.getUint32(0, true);
       colors.push({
         commandId: cmd.id,
         argb,
@@ -283,7 +285,9 @@ export function extractStatusColors(
   for (const cmd of commands) {
     if (cmd.id === CMD_SET_FILL_COLOR && cmd.data.length >= 4) {
       const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
-      const argb = dv.getUint32(0, true);
+      // SetFillColor format: flags(4) + argb(4). ARGB is at offset 4 when 8+ bytes present;
+      // fall back to offset 0 for legacy 4-byte payloads.
+      const argb = cmd.data.length >= 8 ? dv.getUint32(4, true) : dv.getUint32(0, true);
       lastFillColor = {
         r: (argb >>> 16) & 0xFF,
         g: (argb >>> 8) & 0xFF,
@@ -353,14 +357,8 @@ export function determineStatusFromImages(images: ImageDrawCommand[]): boolean |
     if (fromId !== null) return fromId;
   }
 
-  // Fall back to tint-color inference for colorized images.
-  for (let i = images.length - 1; i >= 0; i--) {
-    const image = images[i];
-    // Flag 0x20 is used by webvisu.js for colorized image rendering.
-    if ((image.flags & 0x20) !== 0) {
-      return image.tintColor.r > 140 && image.tintColor.g > 140;
-    }
-  }
+  // Note: flag 0x20 with tintColor is a chroma key (transparency color), not a visual tint.
+  // Status can only be reliably inferred from image names, not from the chroma key color.
 
   return null;
 }
