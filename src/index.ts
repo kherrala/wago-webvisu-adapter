@@ -57,10 +57,6 @@ async function main() {
     logger.info('Initializing controller...');
     await controller.initialize();
 
-    // Navigate to the light switches tab by default
-    logger.info('Navigating to light switches tab...');
-    await controller.navigateToTab('napit');
-
     // Start the HTTP API server
     app.listen(config.server.port, () => {
       logger.info(`HTTP API server listening on port ${config.server.port}`);

@@ -51,6 +51,40 @@ interface DecodedCommandMeta {
   serviceName?: string;
 }
 
+export interface ProtocolPaintRequestEvent {
+  eventTag: number;
+  eventName: string;
+  param1: number;
+  param2: number;
+  x: number;
+  y: number;
+  clientId: number;
+  packedCoordinates: boolean;
+  hasExtraData: boolean;
+  extraDataLength: number;
+  hasClipRect: boolean;
+  hasScaleInfo: boolean;
+}
+
+export interface ProtocolPaintFrame {
+  capturedAt: string;
+  capturedAtMs: number;
+  responseDurationMs: number;
+  httpStatus: number;
+  requestType?: number;
+  requestTypeName?: string;
+  serviceGroup?: number;
+  serviceId?: number;
+  serviceName?: string;
+  requestEvent?: ProtocolPaintRequestEvent;
+  paint: {
+    error: number;
+    commandCount: number;
+    continuation: number;
+  };
+  commands: PaintCommand[];
+}
+
 export interface ProtocolConfig {
   host: string;
   port: number;
@@ -86,6 +120,7 @@ export interface ProtocolConfig {
   sessionTraceEnabled?: boolean;
   sessionTraceDir?: string;
   logRawFrameData?: boolean;
+  onPaintFrame?: (frame: ProtocolPaintFrame) => void;
 }
 
 export const defaultProtocolConfig: ProtocolConfig = {
@@ -481,20 +516,7 @@ export class WebVisuProtocolClient {
     return map[eventTag] ?? `Event(${eventTag})`;
   }
 
-  private decodeGetPaintRequestEvent(serviceFrameBuf: ArrayBuffer): {
-    eventTag: number;
-    eventName: string;
-    param1: number;
-    param2: number;
-    x: number;
-    y: number;
-    clientId: number;
-    packedCoordinates: boolean;
-    hasExtraData: boolean;
-    extraDataLength: number;
-    hasClipRect: boolean;
-    hasScaleInfo: boolean;
-  } | null {
+  private decodeGetPaintRequestEvent(serviceFrameBuf: ArrayBuffer): ProtocolPaintRequestEvent | null {
     try {
       const frame = parseFrame(serviceFrameBuf);
       const entries = readTlvEntries(new BinaryReader(frame.content), frame.content.length);
@@ -906,6 +928,67 @@ export class WebVisuProtocolClient {
     }
   }
 
+  private extractPaintRequestEvent(buf: Buffer, meta: DecodedCommandMeta): ProtocolPaintRequestEvent | undefined {
+    if (meta.requestType !== 2 || meta.serviceGroup === undefined || meta.serviceId === undefined) {
+      return undefined;
+    }
+    const normalizedGroup = this.normalizeServiceGroup(meta.serviceGroup);
+    if (normalizedGroup !== 4 || meta.serviceId !== 4 || buf.length < 24) {
+      return undefined;
+    }
+    return this.decodeGetPaintRequestEvent(this.toArrayBuffer(buf.subarray(4))) ?? undefined;
+  }
+
+  private emitPaintFrame(
+    responseBuf: Buffer,
+    statusCode: number,
+    startedAtMs: number,
+    requestMeta: DecodedCommandMeta,
+    requestEvent?: ProtocolPaintRequestEvent,
+  ): void {
+    if (!this.config.onPaintFrame) {
+      return;
+    }
+
+    const responseMeta = this.decodeCommandMeta('response', responseBuf);
+    if (responseMeta.serviceGroup === undefined || responseMeta.serviceId === undefined) {
+      return;
+    }
+    const normalizedGroup = this.normalizeServiceGroup(responseMeta.serviceGroup);
+    if (normalizedGroup !== 4 || responseMeta.serviceId !== 4) {
+      return;
+    }
+
+    try {
+      const serviceFrameBuf = responseMeta.commandType === 'prefixed-service-response'
+        ? this.toArrayBuffer(responseBuf.subarray(4))
+        : this.toArrayBuffer(responseBuf);
+      const paint = parsePaintDataResponse(serviceFrameBuf);
+      const commands = parsePaintCommands(paint.commands);
+      const capturedAtMs = Date.now();
+      this.config.onPaintFrame({
+        capturedAt: new Date(capturedAtMs).toISOString(),
+        capturedAtMs,
+        responseDurationMs: Math.max(0, capturedAtMs - startedAtMs),
+        httpStatus: statusCode,
+        requestType: requestMeta.requestType,
+        requestTypeName: requestMeta.requestTypeName,
+        serviceGroup: requestMeta.serviceGroup,
+        serviceId: requestMeta.serviceId,
+        serviceName: requestMeta.serviceName,
+        requestEvent,
+        paint: {
+          error: paint.error,
+          commandCount: paint.commandCount,
+          continuation: paint.continuation,
+        },
+        commands,
+      });
+    } catch (error) {
+      logger.debug({ error }, 'Failed to emit paint frame to observer');
+    }
+  }
+
   private logFrame(direction: 'request' | 'response', buf: Buffer, meta: Record<string, unknown> = {}): void {
     const commandMeta = this.decodeCommandMeta(direction, buf);
     const parsedText = this.buildPlainTextParse(direction, buf, commandMeta);
@@ -1072,7 +1155,10 @@ export class WebVisuProtocolClient {
 
   private sendRaw(data: ArrayBuffer, options?: { useHeaderPayload?: boolean; allowEmptyResponse?: boolean }): Promise<ArrayBuffer> {
     return new Promise<ArrayBuffer>((resolve, reject) => {
+      const startedAtMs = Date.now();
       const body = Buffer.from(data);
+      const requestMeta = this.decodeCommandMeta('request', body);
+      const requestEvent = this.extractPaintRequestEvent(body, requestMeta);
       const threshold = this.config.postDataHeaderThreshold ?? 70;
       const useHeaderPayload = options?.useHeaderPayload ??
         (this.sendShortPayloadInHeader && body.length < threshold);
@@ -1147,6 +1233,13 @@ export class WebVisuProtocolClient {
               responseLength: responseBuf.byteLength,
             }, 'HTTP response received');
           }
+          this.emitPaintFrame(
+            responseBuf,
+            res.statusCode ?? 0,
+            startedAtMs,
+            requestMeta,
+            requestEvent,
+          );
           resolve(responseBuf.buffer.slice(responseBuf.byteOffset, responseBuf.byteOffset + responseBuf.byteLength));
         });
         res.on('error', reject);

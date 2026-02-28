@@ -73,6 +73,11 @@ curl http://localhost:8080/api/lights
 | `PROTOCOL_SESSION_TRACE` | `true` | Write per-session sent/received protocol frames to log files |
 | `PROTOCOL_SESSION_TRACE_DIR` | `./data/protocol-trace` | Directory for timestamped protocol session trace files |
 | `PROTOCOL_LOG_RAW_FRAME_DATA` | `false` | Include raw frame bytes (`bytesHex`) in protocol logs and trace files |
+| `PROTOCOL_DEBUG_RENDER` | `false` | Render incoming protocol paint commands into PNG debug frames |
+| `PROTOCOL_DEBUG_RENDER_DIR` | `./data/protocol-render-debug` | Base directory for rendered frame sessions |
+| `PROTOCOL_DEBUG_RENDER_MAX_FRAMES` | `400` | Maximum number of rendered frames per session |
+| `PROTOCOL_DEBUG_RENDER_MIN_INTERVAL_MS` | `0` | Minimum interval between rendered frames (0 = capture all) |
+| `PROTOCOL_DEBUG_RENDER_INCLUDE_EMPTY` | `true` | Persist empty paint responses too (useful for timing analysis gaps) |
 
 The WebVisu URL is configured in `src/config.ts`:
 
@@ -153,6 +158,20 @@ curl -X POST http://localhost:8080/api/lights/kylpyhuone-2/toggle?function=2
 ```bash
 curl http://localhost:8080/api/debug/screenshot > screenshot.png
 ```
+
+In protocol mode, `takeScreenshot` uses the command renderer when `PROTOCOL_DEBUG_RENDER=true`.
+Rendered debug frames are saved automatically into timestamped session folders:
+
+```text
+./data/protocol-render-debug/session-YYYYMMDD-HHMMSS-MMM/
+```
+
+Each captured frame writes:
+- `frame-....png`: rendered approximation of the UI from received paint commands
+- `frame-....json`: timing + request/response metadata for that frame
+- `timeline.ndjson`: append-only timeline for quick sequence analysis
+
+Note: protocol rendering is diagnostic and stateful (applies command deltas over time), but it is still an approximation of the browser canvas.
 
 ## Claude Desktop Integration (MCP)
 
