@@ -223,10 +223,9 @@ export class ProtocolController implements IWebVisuController {
     const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
     const maxFirstVisible = this.getDropdownMaxFirstVisible();
 
-    // Step 2: Dropdown is now open at position 0.
-    // The PLC always opens the dropdown at the top on a fresh press — no sync needed.
-    // Arrow clicks are trusted by count; we update dropdownFirstVisible directly.
-    this.dropdownFirstVisible = 0;
+    // Step 2: Dropdown is now open.
+    // The PLC preserves scroll position between opens — dropdownFirstVisible carries over
+    // from the previous selection. Arrow clicks are trusted by count.
     this.dropdownLastSnapshotLabels = [];
 
     const stepCommands: PaintCommand[] = [...allDropdownCommands];
