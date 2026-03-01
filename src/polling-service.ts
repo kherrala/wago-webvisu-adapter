@@ -98,7 +98,7 @@ async function pollLoop(): Promise<void> {
 
       logger.debug(`Polled ${lightId}: isOn=${isOn}`);
     } catch (error) {
-      logger.error({ error, lightId }, `Error polling light ${lightId}`);
+      logger.error({ err: error, lightId }, `Error polling light ${lightId}`);
     }
 
     // Move to next light

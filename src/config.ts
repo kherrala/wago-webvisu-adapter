@@ -292,3 +292,29 @@ for (const sw of lightSwitchList) {
     (lightAllControllers[spId] ??= []).push({ switchId: sw.id, functionNumber: 2 });
   }
 }
+
+// ─── Floor data ───────────────────────────────────────────────────────────────
+// Floor level per switch dropdown index (0 = basement, 1 = ground, 2 = upper).
+// Entries with no floor data (outdoor switches, unused slots) are omitted.
+const lightSwitchFloors: Record<number, 0 | 1 | 2> = {
+  1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1,
+  11: 1, 12: 1, 13: 1, 14: 1, 15: 1, 16: 1, 17: 1, 18: 2,
+  19: 2, 20: 2, 21: 2,
+  23: 2, 24: 2, 25: 2, 26: 1, 27: 2, 28: 2,
+  29: 2, 30: 2, 31: 2, 32: 2,
+  33: 1,
+  34: 0, 35: 0, 36: 0, 37: 0, 38: 0,
+  41: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 48: 1,
+};
+
+// Maps light ID → floor level via primary controller switch.
+export const lightFloorMap: Record<string, 0 | 1 | 2> = {};
+for (const [lightId, { switchId }] of Object.entries(lightPrimaryController)) {
+  const sw = lightSwitchById[switchId];
+  if (sw) {
+    const floor = lightSwitchFloors[sw.index];
+    if (floor !== undefined) {
+      lightFloorMap[lightId] = floor;
+    }
+  }
+}

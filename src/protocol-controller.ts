@@ -201,7 +201,7 @@ export class ProtocolController implements IWebVisuController {
     try {
       return await this.doSelectLightSwitchOnce(lightId, index);
     } catch (error) {
-      logger.warn({ error, lightId }, 'Selection failed, reconnecting and retrying once');
+      logger.warn({ err: error, lightId }, 'Selection failed, reconnecting and retrying once');
       await this.doReconnect('select-retry');
       return this.doSelectLightSwitchOnce(lightId, index);
     }
@@ -239,8 +239,11 @@ export class ProtocolController implements IWebVisuController {
       const absDelta = Math.abs(delta);
       const scrollApproach = config.protocol?.scrollApproach ?? 'arrow';
 
-      // Use drag when: scrollApproach='drag', or scrolling back toward 0 (faster for large upward jumps).
-      const useDrag = scrollApproach === 'drag' || delta < 0;
+      // Use drag when: scrollApproach='drag', scrolling back toward 0, or delta is large.
+      // Arrow clicks are unreliable beyond ~5 positions (each click is a full HTTP round-trip;
+      // the PLC scroll can fall short of the target after many sequential clicks).
+      const DRAG_THRESHOLD = 5;
+      const useDrag = scrollApproach === 'drag' || delta < 0 || absDelta > DRAG_THRESHOLD;
 
       if (useDrag) {
         // Drag the scrollbar thumb to the target position. The mouseUp on the thumb
@@ -273,8 +276,12 @@ export class ProtocolController implements IWebVisuController {
         // Dropdown CLOSED after drag mouseUp. Reopen to proceed with item click.
         const reopenCmds = await this.client.pressAndCollect(arrowX, arrowY);
         stepCommands.push(...reopenCmds);
-        // Trust the drag geometry — set tracked position from target.
-        this.dropdownFirstVisible = targetFirstVisible;
+        // Sync actual scroll position from reopen paint response.
+        // Falls back to targetFirstVisible if the response has no parseable labels.
+        const syncedFromReopen = this.syncDropdownStateFromCommands(reopenCmds, 'post-drag-reopen');
+        if (!syncedFromReopen) {
+          this.dropdownFirstVisible = targetFirstVisible;
+        }
       } else {
         // Arrow button approach for forward scroll (delta > 0): one click per step.
         // Arrow clicks return only scrollbar-thumb repaints (no text labels).

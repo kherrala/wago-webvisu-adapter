@@ -8,6 +8,7 @@ import {
   lightSwitchById,
   lightSwitches,
   lightSwitchNames,
+  lightFloorMap,
 } from './config';
 import { getAllCachedStatuses, upsertLightStatus } from './database';
 import { getPollingStatus } from './polling-service';
@@ -55,6 +56,7 @@ app.get('/api/lights', async (req: Request, res: Response) => {
         return {
           id: light.id,
           name: light.name,
+          floor: lightFloorMap[light.id] ?? null,
           hasDualFunction,
           controllers: controllers.map(c => ({
             switchId: c.switchId,
@@ -122,6 +124,7 @@ app.get('/api/lights/:lightId', async (req: Request, res: Response) => {
     res.json({
       id: lightId,
       name: light.name,
+      floor: lightFloorMap[lightId] ?? null,
       isOn,
       hasDualFunction,
       controllers: controllers.map(c => ({
