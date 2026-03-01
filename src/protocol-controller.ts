@@ -411,6 +411,10 @@ export class ProtocolController implements IWebVisuController {
       const switchName = lightSwitchNames[index] || lightId;
 
       const selectionCommands = await this.doSelectLightSwitch(lightId);
+      const selectionSettleDelayMs = config.protocol?.selectionSettleDelayMs ?? 200;
+      if (selectionSettleDelayMs > 0) {
+        await this.delay(selectionSettleDelayMs);
+      }
       const statusCommands = await this.forceRenderOnce(`status:${lightId}`);
       const allCommands = [...selectionCommands, ...statusCommands];
 
