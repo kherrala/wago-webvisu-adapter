@@ -1,6 +1,14 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { IWebVisuController } from './controller-interface';
-import { lightSwitches, lightSwitchNames, lightSwitchList, lightSwitchById } from './config';
+import {
+  lightList,
+  lightById,
+  lightPrimaryController,
+  lightAllControllers,
+  lightSwitchById,
+  lightSwitches,
+  lightSwitchNames,
+} from './config';
 import { getAllCachedStatuses, upsertLightStatus } from './database';
 import { getPollingStatus } from './polling-service';
 import pino from 'pino';
@@ -31,26 +39,28 @@ app.get('/health', async (req: Request, res: Response) => {
   });
 });
 
-// List all available light switches with cached status
+// List all physical lights with cached status
 app.get('/api/lights', async (req: Request, res: Response) => {
   try {
-    // Get all cached statuses as a lookup map
     const cachedStatuses = new Map(
       getAllCachedStatuses().map(s => [s.id, s])
     );
 
-    const lights = lightSwitchList
-      .filter(light => light.firstPress) // Only include switches with actual functions
+    const lights = lightList
+      .filter(light => lightPrimaryController[light.id]) // only lights with a controlling switch
       .map(light => {
         const cached = cachedStatuses.get(light.id);
+        const controllers = lightAllControllers[light.id] ?? [];
+        const hasDualFunction = controllers.some(c => c.functionNumber === 2);
         return {
           id: light.id,
           name: light.name,
-          index: light.index,
-          firstPress: light.firstPress,
-          secondPress: (light as any).secondPress || null,
-          hasDualFunction: !!(light as any).secondPress,
-          // Include cached status if available
+          hasDualFunction,
+          controllers: controllers.map(c => ({
+            switchId: c.switchId,
+            switchName: lightSwitchNames[lightSwitches[c.switchId]] ?? c.switchId,
+            functionNumber: c.functionNumber,
+          })),
           isOn: cached?.isOn ?? null,
           isOn2: cached?.isOn2 ?? null,
           polledAt: cached?.polledAt ?? null,
@@ -72,107 +82,103 @@ app.get('/api/lights', async (req: Request, res: Response) => {
   }
 });
 
-// Get status of a specific light (live query, also updates cache)
-app.get('/api/lights/:id', async (req: Request, res: Response) => {
-  const { id } = req.params;
+// Get live status of a physical light by light ID
+app.get('/api/lights/:lightId', async (req: Request, res: Response) => {
+  const { lightId } = req.params;
 
-  if (!(id in lightSwitches)) {
+  const light = lightById[lightId];
+  if (!light) {
     res.status(404).json({
       error: 'Light not found',
-      validIds: Object.keys(lightSwitches).filter(k => lightSwitchById[k]?.firstPress),
+      validIds: lightList.filter(l => lightPrimaryController[l.id]).map(l => l.id),
     });
     return;
   }
 
-  const switchInfo = lightSwitchById[id];
-  const hasDualFunction = !!(switchInfo as any)?.secondPress;
+  const primary = lightPrimaryController[lightId];
+  if (!primary) {
+    res.status(404).json({ error: 'No controlling switch found for this light', lightId });
+    return;
+  }
 
   try {
-    const status = await controller.getLightStatus(id);
+    const switchStatus = await controller.getLightStatus(primary.switchId);
+    // Extract the correct indicator based on which function controls this light
+    const isOn = primary.functionNumber === 2 ? switchStatus.isOn2 ?? false : switchStatus.isOn;
 
-    // Store the status in the database
+    // Store in database keyed by light ID
     upsertLightStatus({
-      id: status.id,
-      name: status.name,
-      isOn: status.isOn,
-      isOn2: status.isOn2,
-      firstPress: switchInfo?.firstPress ?? null,
-      secondPress: (switchInfo as any)?.secondPress ?? null,
+      id: lightId,
+      name: light.name,
+      isOn,
+      isOn2: undefined,
+      firstPress: light.name,
+      secondPress: null,
     });
 
+    const controllers = lightAllControllers[lightId] ?? [];
+    const hasDualFunction = controllers.some(c => c.functionNumber === 2);
+
     res.json({
-      id: status.id,
-      name: status.name,
-      isOn: status.isOn,
-      ...(status.isOn2 !== undefined ? { isOn2: status.isOn2 } : {}),
-      firstPress: switchInfo?.firstPress || null,
-      secondPress: (switchInfo as any)?.secondPress || null,
+      id: lightId,
+      name: light.name,
+      isOn,
       hasDualFunction,
+      controllers: controllers.map(c => ({
+        switchId: c.switchId,
+        switchName: lightSwitchNames[lightSwitches[c.switchId]] ?? c.switchId,
+        functionNumber: c.functionNumber,
+      })),
       _links: {
-        self: `/api/lights/${id}`,
-        toggle: `/api/lights/${id}/toggle`,
-        ...(hasDualFunction ? { toggleSecond: `/api/lights/${id}/toggle?function=2` } : {}),
+        self: `/api/lights/${lightId}`,
+        toggle: `/api/lights/${lightId}/toggle`,
       },
     });
   } catch (error) {
-    logger.error({ error, lightId: id }, 'Error getting light status');
+    logger.error({ error, lightId }, 'Error getting light status');
     res.status(500).json({ error: 'Failed to get light status' });
   }
 });
 
-// Toggle a light switch
-// Use ?function=2 to toggle the second function of dual-function switches
-app.post('/api/lights/:id/toggle', async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const functionParam = req.query.function as string | undefined;
-  const functionNumber = functionParam === '2' ? 2 : 1;
+// Toggle a physical light by light ID
+app.post('/api/lights/:lightId/toggle', async (req: Request, res: Response) => {
+  const { lightId } = req.params;
 
-  if (!(id in lightSwitches)) {
+  const light = lightById[lightId];
+  if (!light) {
     res.status(404).json({
       error: 'Light not found',
-      validIds: Object.keys(lightSwitches),
+      validIds: lightList.filter(l => lightPrimaryController[l.id]).map(l => l.id),
     });
     return;
   }
 
-  const switchInfo = lightSwitchById[id];
-  const hasDualFunction = !!(switchInfo as any)?.secondPress;
-
-  // Validate function=2 is only used for dual-function switches
-  if (functionNumber === 2 && !hasDualFunction) {
-    res.status(400).json({
-      error: 'This switch does not have a second function',
-      id,
-      name: switchInfo?.name || id,
-      firstPress: switchInfo?.firstPress || null,
-    });
+  const primary = lightPrimaryController[lightId];
+  if (!primary) {
+    res.status(404).json({ error: 'No controlling switch found for this light', lightId });
     return;
   }
 
   try {
-    await controller.toggleLight(id, functionNumber as 1 | 2);
+    await controller.toggleLight(primary.switchId, primary.functionNumber);
 
-    const functionInfo = functionNumber === 2
-      ? (switchInfo as any)?.secondPress
-      : switchInfo?.firstPress;
-
-    // Don't fetch status after toggle - it causes extra UI interactions
-    // User can call GET /api/lights/:id separately if needed
     res.json({
-      message: `Light toggled successfully (function ${functionNumber})`,
-      id,
-      name: lightSwitchNames[lightSwitches[id]] || id,
-      function: functionNumber,
-      controls: functionInfo || null,
+      message: 'Light toggled successfully',
+      id: lightId,
+      name: light.name,
+      via: {
+        switchId: primary.switchId,
+        switchName: lightSwitchNames[lightSwitches[primary.switchId]] ?? primary.switchId,
+        functionNumber: primary.functionNumber,
+      },
       _links: {
-        self: `/api/lights/${id}`,
-        toggle: `/api/lights/${id}/toggle`,
-        ...(hasDualFunction ? { toggleSecond: `/api/lights/${id}/toggle?function=2` } : {}),
-        status: `/api/lights/${id}`,
+        self: `/api/lights/${lightId}`,
+        toggle: `/api/lights/${lightId}/toggle`,
+        status: `/api/lights/${lightId}`,
       },
     });
   } catch (error) {
-    logger.error({ error, lightId: id, function: functionNumber }, 'Error toggling light');
+    logger.error({ error, lightId }, 'Error toggling light');
     res.status(500).json({ error: 'Failed to toggle light' });
   }
 });
@@ -194,7 +200,7 @@ app.get('/api/polling/status', async (req: Request, res: Response) => {
   }
 });
 
-// Get all lights with their current status
+// Get all lights with their current status (live query)
 app.get('/api/lights/status/all', async (req: Request, res: Response) => {
   try {
     const lights = await controller.getAllLights();
@@ -207,19 +213,6 @@ app.get('/api/lights/status/all', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error({ error }, 'Error getting all light statuses');
     res.status(500).json({ error: 'Failed to get light statuses' });
-  }
-});
-
-// Debug endpoint: take a screenshot
-app.get('/api/debug/screenshot', async (req: Request, res: Response) => {
-  try {
-    const screenshot = await controller.takeScreenshot();
-    res.set('Content-Type', 'image/png');
-    res.set('Cache-Control', 'no-store');
-    res.send(screenshot);
-  } catch (error) {
-    logger.error({ error }, 'Error taking screenshot');
-    res.status(500).json({ error: 'Failed to take screenshot' });
   }
 });
 
@@ -242,45 +235,6 @@ app.get('/api/debug/rendered-ui', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error({ error }, 'Error getting rendered UI image');
     res.status(500).json({ error: 'Failed to get rendered UI image' });
-  }
-});
-
-// Debug endpoint: get canvas info (Playwright only)
-app.get('/api/debug/canvas', async (req: Request, res: Response) => {
-  try {
-    if (!controller.getCanvasInfo) {
-      res.status(501).json({ error: 'Canvas info not available in protocol mode' });
-      return;
-    }
-    const canvasInfo = await controller.getCanvasInfo();
-    res.json({
-      canvas: canvasInfo,
-      viewport: { width: 1280, height: 768 },
-      message: 'Use these values to calibrate coordinates. Tab coordinates are page-absolute, canvas element coordinates are relative to canvas position.',
-    });
-  } catch (error) {
-    logger.error({ error }, 'Error getting canvas info');
-    res.status(500).json({ error: 'Failed to get canvas info' });
-  }
-});
-
-// Debug endpoint: check status indicator position and color (Playwright only)
-app.get('/api/debug/status-indicator', async (req: Request, res: Response) => {
-  try {
-    if (!controller.debugStatusIndicator) {
-      res.status(501).json({ error: 'Status indicator debug not available in protocol mode' });
-      return;
-    }
-    const debug = await controller.debugStatusIndicator();
-    res.json({
-      position: debug.position,
-      color: debug.color,
-      isOn: debug.color.g > 140 && debug.color.r > 140,
-      message: 'Screenshot saved. Check position and color values. Yellow ON has R>140, G>140. Brown OFF has G<100.',
-    });
-  } catch (error) {
-    logger.error({ error }, 'Error debugging status indicator');
-    res.status(500).json({ error: 'Failed to debug status indicator' });
   }
 });
 

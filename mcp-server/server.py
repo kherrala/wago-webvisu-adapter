@@ -32,7 +32,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="list_lights",
-            description="List all available light switches in the WAGO home automation system. Each switch shows which lights it controls (firstPress and optionally secondPress for dual-function switches).",
+            description="List all physical lights in the WAGO home automation system with their current cached on/off status and which switches control them.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -41,13 +41,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_light_status",
-            description="Get the current on/off status of a specific light switch. Use light_id like 'kylpyhuone-1' or 'keittio-1'. Shows firstPress (what the switch controls) and secondPress for dual-function switches.",
+            description="Get the live on/off status of a physical light by its ID (e.g. 'kylpyhuone', 'keittio-katto', 'aikuisten-katto'). Use list_lights to discover valid IDs.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "light_id": {
                         "type": "string",
-                        "description": "The ID of the light switch (e.g., 'kylpyhuone-1', 'keittio-1')",
+                        "description": "The ID of the physical light (e.g. 'kylpyhuone', 'autokatos', 'aikuisten-katto')",
                     },
                 },
                 "required": ["light_id"],
@@ -55,19 +55,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="toggle_light",
-            description="Toggle a light switch on or off. Some switches have dual functions: use function=1 (default) for firstPress or function=2 for secondPress. Example: to toggle 'Sauna siivousvalo' on switch 'kylpyhuone-2', use function=2.",
+            description="Toggle a physical light on or off by its ID. Use list_lights to discover valid light IDs.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "light_id": {
                         "type": "string",
-                        "description": "The ID of the light switch to toggle (e.g., 'kylpyhuone-1', 'keittio-1')",
-                    },
-                    "function": {
-                        "type": "integer",
-                        "enum": [1, 2],
-                        "default": 1,
-                        "description": "Which function to toggle: 1 for firstPress (default), 2 for secondPress (only for dual-function switches)",
+                        "description": "The ID of the physical light to toggle (e.g. 'kylpyhuone', 'autokatos', 'aikuisten-katto')",
                     },
                 },
                 "required": ["light_id"],
@@ -102,13 +96,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 if not light_id:
                     return [TextContent(type="text", text='{"error": "light_id is required"}')]
 
-                # Support dual-function switches with function parameter
-                function_num = arguments.get("function", 1)
-                url = f"/api/lights/{light_id}/toggle"
-                if function_num == 2:
-                    url += "?function=2"
-
-                response = await client.post(url)
+                response = await client.post(f"/api/lights/{light_id}/toggle")
                 response.raise_for_status()
                 return [TextContent(type="text", text=response.text)]
 

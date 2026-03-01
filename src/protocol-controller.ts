@@ -49,8 +49,9 @@ export class ProtocolController implements IWebVisuController {
   private dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
   private dropdownLastSnapshotLabels: Array<{ text: string; index: number; top: number; bottom: number; row: number }> = [];
 
-  // Cache status by light/indicator for cases where PLC does not redraw unchanged icon.
-  private lastStatusByIndicator = new Map<string, boolean>();
+  // Cache status by physical light name (normalised firstPress/secondPress text).
+  // Keyed this way so that multiple switches controlling the same light share one entry.
+  private lastStatusByLight = new Map<string, boolean>();
 
   // Reconnection state.
   private consecutiveEmptyRenders = 0;
@@ -145,7 +146,7 @@ export class ProtocolController implements IWebVisuController {
     this.dropdownFirstVisible = 0;
     this.dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
     this.dropdownLastSnapshotLabels = [];
-    this.lastStatusByIndicator.clear();
+    this.lastStatusByLight.clear();
     this.consecutiveEmptyRenders = 0;
     logger.info('Protocol controller closed');
   }
@@ -414,7 +415,9 @@ export class ProtocolController implements IWebVisuController {
       }
 
       const switchInfo = lightSwitchById[lightId];
-      const hasDualFunction = !!(switchInfo as any)?.secondPress;
+      const firstPressLightId = (switchInfo as any)?.firstPressLightId as string | undefined;
+      const secondPressLightId = (switchInfo as any)?.secondPressLightId as string | undefined;
+      const hasDualFunction = !!secondPressLightId;
       const switchName = lightSwitchNames[index] || lightId;
 
       const selectionCommands = await this.doSelectLightSwitch(lightId);
@@ -427,45 +430,49 @@ export class ProtocolController implements IWebVisuController {
 
       const indicatorImages = this.resolveIndicatorImages(allCommands);
 
+      // Use physical light IDs as cache keys so that multiple switches controlling
+      // the same light share one entry (cache hits propagate between switches).
+      const key1 = firstPressLightId ?? `${lightId}:1`;
+      const key2 = secondPressLightId ?? `${lightId}:2`;
+
       let isOn1 = this.resolveLampStatus(indicatorImages.indicator1);
       if (isOn1 === null) {
-        const cached = this.lastStatusByIndicator.get(`${lightId}:1`);
+        const cached = this.lastStatusByLight.get(key1);
         if (cached !== undefined) {
           isOn1 = cached;
-          logger.info(`No fresh lamp redraw for ${lightId} indicator 1, using cached=${cached}`);
+          logger.info(`No fresh lamp redraw for ${lightId} indicator 1 (light: ${key1}), using cached=${cached}`);
         } else {
           isOn1 = false;
-          logger.warn(`No lamp image found for ${lightId} indicator 1, defaulting to OFF`);
+          logger.warn(`No lamp image found for ${lightId} indicator 1 (light: ${key1}), defaulting to OFF`);
         }
       }
-      this.lastStatusByIndicator.set(`${lightId}:1`, isOn1);
-      logger.info(`Status indicator 1 for ${lightId}: images=${JSON.stringify(this.formatImageSummary(indicatorImages.indicator1))}, isOn=${isOn1}`);
+      this.lastStatusByLight.set(key1, isOn1);
+      logger.info(`Status indicator 1 for ${lightId} (light: ${key1}): images=${JSON.stringify(this.formatImageSummary(indicatorImages.indicator1))}, isOn=${isOn1}`);
 
       let resolved2 = this.resolveLampStatus(indicatorImages.indicator2);
       if (resolved2 === null) {
-        const cached = this.lastStatusByIndicator.get(`${lightId}:2`);
+        const cached = this.lastStatusByLight.get(key2);
         if (cached !== undefined) {
           resolved2 = cached;
-          logger.info(`No fresh lamp redraw for ${lightId} indicator 2, using cached=${cached}`);
+          logger.info(`No fresh lamp redraw for ${lightId} indicator 2 (light: ${key2}), using cached=${cached}`);
         } else {
           resolved2 = false;
         }
       }
-      this.lastStatusByIndicator.set(`${lightId}:2`, resolved2);
-      logger.info(`Status indicator 2 for ${lightId}: images=${JSON.stringify(this.formatImageSummary(indicatorImages.indicator2))}, isOn=${resolved2}`);
+      this.lastStatusByLight.set(key2, resolved2);
+      logger.info(`Status indicator 2 for ${lightId} (light: ${key2}): images=${JSON.stringify(this.formatImageSummary(indicatorImages.indicator2))}, isOn=${resolved2}`);
 
+      // indicator3 has no light ID mapping — cache under switch-specific key
       let resolved3 = this.resolveLampStatus(indicatorImages.indicator3);
       if (resolved3 === null) {
-        const cached = this.lastStatusByIndicator.get(`${lightId}:3`);
+        const cached = this.lastStatusByLight.get(`${lightId}:3`);
         if (cached !== undefined) {
           resolved3 = cached;
-          logger.info(`No fresh lamp redraw for ${lightId} indicator 3, using cached=${cached}`);
         } else {
           resolved3 = false;
         }
       }
-      this.lastStatusByIndicator.set(`${lightId}:3`, resolved3);
-      logger.info(`Status indicator 3 for ${lightId}: images=${JSON.stringify(this.formatImageSummary(indicatorImages.indicator3))}, isOn=${resolved3}`);
+      this.lastStatusByLight.set(`${lightId}:3`, resolved3);
 
       let isOn2: boolean | undefined;
       if (hasDualFunction) {
@@ -1025,7 +1032,7 @@ export class ProtocolController implements IWebVisuController {
     this.dropdownFirstVisible = 0;
     this.dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
     this.dropdownLastSnapshotLabels = [];
-    this.lastStatusByIndicator.clear();
+    this.lastStatusByLight.clear();
     this.consecutiveEmptyRenders = 0;
     this.lastReconnectAt = Date.now();
 

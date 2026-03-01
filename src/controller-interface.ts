@@ -20,6 +20,4 @@ export interface IWebVisuController {
   isConnected(): Promise<boolean>;
   getPendingOperationCount(): number;
   resetDropdownState(): void;
-  getCanvasInfo?(): Promise<{ x: number; y: number; width: number; height: number } | null>;
-  debugStatusIndicator?(): Promise<{ screenshot: Buffer; position: { x: number; y: number }; color: { r: number; g: number; b: number } }>;
 }
