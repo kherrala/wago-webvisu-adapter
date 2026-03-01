@@ -52,20 +52,17 @@ app.get('/api/lights', async (req: Request, res: Response) => {
       .map(light => {
         const cached = cachedStatuses.get(light.id);
         const controllers = lightAllControllers[light.id] ?? [];
-        const hasDualFunction = controllers.some(c => c.functionNumber === 2);
         return {
           id: light.id,
           name: light.name,
           floor: lightFloorMap[light.id] ?? null,
-          hasDualFunction,
+          isOn: cached?.isOn ?? null,
+          polledAt: cached?.polledAt ?? null,
           controllers: controllers.map(c => ({
             switchId: c.switchId,
             switchName: lightSwitchNames[lightSwitches[c.switchId]] ?? c.switchId,
             functionNumber: c.functionNumber,
           })),
-          isOn: cached?.isOn ?? null,
-          isOn2: cached?.isOn2 ?? null,
-          polledAt: cached?.polledAt ?? null,
           href: `/api/lights/${light.id}`,
         };
       });
@@ -119,14 +116,12 @@ app.get('/api/lights/:lightId', async (req: Request, res: Response) => {
     });
 
     const controllers = lightAllControllers[lightId] ?? [];
-    const hasDualFunction = controllers.some(c => c.functionNumber === 2);
 
     res.json({
       id: lightId,
       name: light.name,
       floor: lightFloorMap[lightId] ?? null,
       isOn,
-      hasDualFunction,
       controllers: controllers.map(c => ({
         switchId: c.switchId,
         switchName: lightSwitchNames[lightSwitches[c.switchId]] ?? c.switchId,
