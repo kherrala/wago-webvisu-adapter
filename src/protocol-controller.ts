@@ -9,6 +9,7 @@ import {
   uiCoordinates,
   lightSwitches,
   lightSwitchNames,
+  lightSwitchPlcLabels,
   lightSwitchById,
   lightSwitchList,
 } from './config';
@@ -237,9 +238,12 @@ export class ProtocolController implements IWebVisuController {
       const absDelta = Math.abs(delta);
       const scrollApproach = config.protocol?.scrollApproach ?? 'arrow';
 
-      if (scrollApproach === 'drag') {
+      // Use drag when: scrollApproach='drag', or scrolling back toward 0 (faster for large upward jumps).
+      const useDrag = scrollApproach === 'drag' || delta < 0;
+
+      if (useDrag) {
         // Drag the scrollbar thumb to the target position. The mouseUp on the thumb
-        // CLOSES the dropdown (observed behavior). After drag, reopen to verify scroll position.
+        // CLOSES the dropdown (observed behavior). After drag, reopen to proceed with item click.
         const dragStartHoldMs = config.protocol?.dragStartHoldMs ?? 60;
         const dragStepDelayMs = config.protocol?.dragStepDelayMs ?? 45;
         const dragEndHoldMs = config.protocol?.dragEndHoldMs ?? 50;
@@ -271,25 +275,23 @@ export class ProtocolController implements IWebVisuController {
         // Trust the drag geometry — set tracked position from target.
         this.dropdownFirstVisible = targetFirstVisible;
       } else {
-        // Arrow button approach: click scrollbar arrow buttons, one step per click.
+        // Arrow button approach for forward scroll (delta > 0): one click per step.
         // Arrow clicks return only scrollbar-thumb repaints (no text labels).
         // Trust the click count — update tracked position directly, no re-read needed.
         const scrollArrowX = scrollbarConfig.x;
         const downArrowY = scrollbarConfig.scanRange.bottomY;
-        const upArrowY = scrollbarConfig.scanRange.topY;
-        const arrowY = delta >= 0 ? downArrowY : upArrowY;
 
         logger.info({
           lightId, index,
           currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible,
-          delta, direction: delta >= 0 ? 'down' : 'up',
+          delta,
           clicks: absDelta,
         }, 'Scrolling dropdown via arrow button');
 
         await this.client.mouseMove(scrollArrowX, scrollbarConfig.thumbRange.topY);
         for (let click = 0; click < absDelta; click++) {
-          await this.client.mouseDown(scrollArrowX, arrowY);
-          const upCmds = await this.client.mouseUpAndCollect(scrollArrowX, arrowY);
+          await this.client.mouseDown(scrollArrowX, downArrowY);
+          const upCmds = await this.client.mouseUpAndCollect(scrollArrowX, downArrowY);
           stepCommands.push(...upCmds);
         }
 
@@ -337,6 +339,11 @@ export class ProtocolController implements IWebVisuController {
     // Step 5: Click item → collect commands
     const selectCommands = await this.client.clickAndCollect(dropdownConfig.itemX, itemY);
     stepCommands.push(...selectCommands);
+
+    // Step 6: Verify the dropdown header now shows the expected item.
+    // The item-click response redraws the header with the selected label.
+    // Mismatch means a wrong item was clicked — throw to trigger reconnect+retry.
+    this.verifyDropdownHeader(selectCommands, lightId, index);
 
     logger.info(`Light switch ${lightId} selected`);
     return stepCommands;
@@ -657,6 +664,39 @@ export class ProtocolController implements IWebVisuController {
     };
   }
 
+  private extractDropdownHeaderLabel(commands: PaintCommand[]): string | null {
+    const { dropdownList, dropdownArrow } = uiCoordinates.lightSwitches;
+    const labels = extractTextLabels(commands);
+    // Header area: above the list (bottom < firstItemY), below the tab bar (top > 50),
+    // and within the dropdown width (left < arrow button X).
+    const headerLabels = labels.filter(
+      (label) =>
+        label.bottom < dropdownList.firstItemY &&
+        label.top > 50 &&
+        label.left < dropdownArrow.x
+    );
+    if (headerLabels.length === 0) return null;
+    // Return the last (most recently drawn) label in case of duplicates.
+    return headerLabels[headerLabels.length - 1].text;
+  }
+
+  private verifyDropdownHeader(commands: PaintCommand[], lightId: string, index: number): void {
+    const expectedPlcLabel = lightSwitchPlcLabels[index];
+    const headerLabel = this.extractDropdownHeaderLabel(commands);
+    if (headerLabel === null) {
+      logger.warn({ lightId, index, expectedPlcLabel }, 'Header text not found in selection commands; cannot verify');
+      return;
+    }
+    const normalizedHeader = this.normalizeVisuText(headerLabel);
+    const normalizedExpected = this.normalizeVisuText(expectedPlcLabel);
+    if (normalizedHeader !== normalizedExpected) {
+      throw new Error(
+        `Header verification failed: expected="${expectedPlcLabel}", got="${headerLabel}", light=${lightId}, index=${index}`
+      );
+    }
+    logger.info({ lightId, index, headerText: headerLabel }, 'Header verification passed');
+  }
+
   private getDropdownScrollY(firstVisible: number, maxFirstVisible: number = this.getDropdownMaxFirstVisible()): number {
     const topY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
     const bottomY = uiCoordinates.lightSwitches.scrollbar.thumbRange.bottomY;
@@ -671,9 +711,9 @@ export class ProtocolController implements IWebVisuController {
       return null;
     }
     for (const light of lightSwitchList) {
-      if (this.normalizeVisuText(light.name) === normalized) {
-        return light.index;
-      }
+      if (this.normalizeVisuText(light.name) === normalized) return light.index;
+      const plcLabel = (light as { plcLabel?: string }).plcLabel;
+      if (plcLabel && this.normalizeVisuText(plcLabel) === normalized) return light.index;
     }
     return null;
   }

@@ -131,61 +131,69 @@ export const uiCoordinates = {
   },
 };
 
-// All 56 light switches in dropdown order (0-indexed)
-// ID format: lowercase with hyphens for URL-safe API access
+// All 57 light switches in dropdown order (0-indexed, matching actual PLC dropdown positions).
+//
+// Fields:
+//   id        — URL-safe identifier used in the REST API
+//   name      — Display name in the REST API
+//   plcLabel  — Exact text shown in the PLC dropdown/header (only set when it differs from name)
+//   firstPress  — Light or function controlled by the first button press
+//   secondPress — Light or function controlled by the second button press (dual-function switches only)
+//   index     — 0-based position in the PLC dropdown list
 export const lightSwitchList = [
   { id: '0', name: '0', index: 0 },
-  { id: 'kylpyhuone-1', name: 'Kylpyhuone 1', firstPress: 'Kylpyhuone alakerta', index: 1 },
-  { id: 'kylpyhuone-2', name: 'Kylpyhuone 2', firstPress: 'Sauna laude LED', secondPress: 'Sauna siivousvalo', index: 2 },
-  { id: 'wc-alakerta-1', name: 'WC alakerta 1', firstPress: 'WC alakerta kattovalo', index: 3 },
-  { id: 'wc-alakerta-2', name: 'WC alakerta 2', firstPress: 'WC alakerta peili', index: 4 },
-  { id: 'khh-1', name: 'KHH 1', firstPress: 'Kodinhoitohuone LED', index: 5 },
-  { id: 'khh-2', name: 'KHH 2', firstPress: 'Kodinhoitohuone kattovalo', index: 6 },
-  { id: 'keittio-1', name: 'Keittiö 1', firstPress: 'Terassi ulkovalo', index: 7 },
+  { id: 'kylpyhuone-1', name: 'Kylpyhuone 1', firstPress: 'Kylpyhuone', index: 1 },
+  { id: 'kylpyhuone-2', name: 'Kylpyhuone 2', firstPress: 'Saunan laude ledi', secondPress: 'Sauna siivousvalo', index: 2 },
+  { id: 'wc-alakerta-1', name: 'WC alakerta 1', firstPress: 'WC Alakerta katto', index: 3 },
+  { id: 'wc-alakerta-2', name: 'WC alakerta 2', firstPress: 'WC Alakerta peili', index: 4 },
+  { id: 'khh-1', name: 'KHH 1', firstPress: 'Kodinhoitohuone ledi', index: 5 },
+  { id: 'khh-2', name: 'KHH 2', firstPress: 'Kodinhoitohuone kattovalo 2', index: 6 },
+  { id: 'keittio-1', name: 'Keittiö 1', firstPress: 'Ulkovalo Terassi', secondPress: 'Varasto ulkovalo', index: 7 },
   { id: 'keittio-2', name: 'Keittiö 2', firstPress: 'Sisäänkäynti', secondPress: 'Autokatos', index: 8 },
   { id: 'tuulikaappi-1', name: 'Tuulikaappi 1', firstPress: 'Sisäänkäynti', secondPress: 'Autokatos', index: 9 },
   { id: 'tuulikaappi-2', name: 'Tuulikaappi 2', firstPress: 'Tuulikaappi', secondPress: 'Eteinen', index: 10 },
-  { id: 'mh-alakerta-1', name: 'MH alakerta 1', firstPress: 'Makuuhuone alakerta kattovalo', index: 11 },
-  { id: 'mh-alakerta-2', name: 'MH alakerta 2', firstPress: 'Makuuhuone alakerta ikkunavalo', index: 12 },
-  { id: 'eteinen-1', name: 'Eteinen 1', firstPress: 'Eteinen aula', index: 13 },
-  { id: 'eteinen-2', name: 'Eteinen 2', firstPress: 'Eteinen tuulikaappi', index: 14 },
+  { id: 'mh-alakerta-1', name: 'MH alakerta 1', firstPress: 'MH alakerta kattovalo', index: 11 },
+  { id: 'mh-alakerta-2', name: 'MH alakerta 2', firstPress: 'MH alakerta ikkuna', index: 12 },
+  { id: 'eteinen-1', name: 'Eteinen 1', firstPress: 'Eteinen', index: 13 },
+  { id: 'eteinen-2', name: 'Eteinen 2', firstPress: 'Tuulikaappi', index: 14 },
   { id: 'khh-vaatehuone', name: 'KHH vaatehuone', firstPress: 'Kodinhoitohuone vaatehuone', index: 15 },
-  { id: 'tuulikaappi-vaatehuone', name: 'Tuulikaappi vaatehuone', firstPress: 'Eteinen vaatehuone', index: 16 },
-  { id: 'porras-ak-1', name: 'Porras AK 1', firstPress: 'Portaikon valot', index: 17 },
+  { id: 'tuulikaappi-vaatehuone', name: 'Tuulikaappi vaatehuone', firstPress: 'Tuulikaappi vaatehuone', index: 16 },
+  { id: 'porras-ak-1', name: 'Porras AK 1', firstPress: 'Portaikko', index: 17 },
   { id: 'porras-ak-2', name: 'Porras AK 2', firstPress: 'Yläkerta aula kattovalo', index: 18 },
-  { id: 'mh-1-1', name: 'MH 1/1', firstPress: 'Aikuisten makuuhuone kattovalo', index: 19 },
-  { id: 'mh-1-2', name: 'MH 1/2', firstPress: 'Aikuisten makuuhuone ikkunavalo', index: 20 },
-  { id: 'mh-1-vaatehuone', firstPress: 'Aikuisten makuuhuone', name: 'Aikuisten makuuhuone vaatehuone', index: 21 },
+  { id: 'mh-1-1', name: 'MH 1/1', firstPress: 'Essi Kattovalo', index: 19 },
+  { id: 'mh-1-2', name: 'MH 1/2', firstPress: 'Essi ikkunavalo', index: 20 },
+  // PLC dropdown label is 'Essi vaatehuone'; original API name kept for backwards compatibility
+  { id: 'mh-1-vaatehuone', name: 'Aikuisten makuuhuone vaatehuone', plcLabel: 'Essi vaatehuone', firstPress: 'Essi Vaatehuone', index: 21 },
   { id: '22', name: '22', index: 22 },
-  { id: 'kylpyhuone-yk-1', name: 'Kylpyhuone YK 1', firstPress: 'Kylpyhuone yläkerta kattovalo', index: 23 },
-  { id: 'kylpyhuone-yk-2', name: 'Kylpyhuone YK 2', firstPress: 'Kylpyhuone yläkerta peilivalo', index: 24 },
-  { id: 'porras-yk-1', name: 'Porras YK 1', firstPress: 'Yläkerran aula rappuset', index: 25 },
-  { id: 'porras-yk-2', name: 'Porras YK 2', firstPress: 'Portaikon valot', index: 26 },
-  { id: 'aula-yk-1', name: 'Aula YK 1', firstPress: 'Yläkerran aula LED', index: 27 },
-  { id: 'aula-yk-2', name: 'Aula YK 2', firstPress: 'Yläkerran aula katovalo', index: 28 },
-  { id: 'mh2-1', name: 'MH2/1', firstPress: 'Makuuhuone yläkerta kattovalo Aarni', index: 29 },
-  { id: 'mh2-2', name: 'MH2/2', firstPress: 'Makuuhuone yläkerta ikkunavalo Aarni', secondPress: 'Yläkerta aula ikkunavalo', index: 30 },
-  { id: 'mh3-1', name: 'MH3/1', firstPress: 'Makuuhuone yläkerta kattovalo Seela', index: 31 },
-  { id: 'mh3-2', name: 'MH3/2', firstPress: 'Makuuhuone yläkerta ikkunavalo Seela', index: 32 },
+  { id: 'kylpyhuone-yk-1', name: 'Kylpyhuone YK 1', firstPress: 'Kylpyhuone yläkerta katto', index: 23 },
+  { id: 'kylpyhuone-yk-2', name: 'Kylpyhuone YK 2', firstPress: 'Kylpyhuone yk peilivalo', index: 24 },
+  { id: 'porras-yk-1', name: 'Porras YK 1', firstPress: 'Yläkerta aula kattovalo', secondPress: 'Yläkerta aula ledi', index: 25 },
+  { id: 'porras-yk-2', name: 'Porras YK 2', firstPress: 'Portaikko', index: 26 },
+  { id: 'aula-yk-1', name: 'Aula YK 1', firstPress: 'Yläkerta aula ledi', index: 27 },
+  { id: 'aula-yk-2', name: 'Aula YK 2', firstPress: 'Yläkerta aula kattovalo', index: 28 },
+  { id: 'mh2-1', name: 'MH2/1', firstPress: 'Onni Kattovalo', index: 29 },
+  { id: 'mh2-2', name: 'MH2/2', firstPress: 'Onni ikkunavalo', secondPress: 'Aula ikkunvalo', index: 30 },
+  { id: 'mh3-1', name: 'MH3/1', firstPress: 'Aatu Kattovalo', index: 31 },
+  { id: 'mh3-2', name: 'MH3/2', firstPress: 'Aatu ikkunavalo', index: 32 },
   { id: 'tekninen-tila', name: 'Tekninen tila', firstPress: 'Tekninen tila', index: 33 },
-  { id: 'kellari-wc', name: 'Kellari WC', firstPress: 'Kellari WC', index: 34 },
+  { id: 'kellari-wc', name: 'Kellari WC', firstPress: 'WC Kellari', index: 34 },
   { id: 'kellari-eteinen-1', name: 'Kellari eteinen 1', firstPress: 'Kellari varasto', index: 35 },
   { id: 'kellari-eteinen-2', name: 'Kellari eteinen 2', firstPress: 'Kellari varasto', index: 36 },
   { id: 'kellari-1', name: 'Kellari 1', firstPress: 'Kellari takaosa', secondPress: 'Kellari etuosa', index: 37 },
-  { id: 'kellari-2', name: 'Kellari 2', firstPress: 'Kellari biljardipöytä', index: 38 },
+  { id: 'kellari-2', name: 'Kellari 2', firstPress: 'Biljardipöytä', index: 38 },
   { id: '39', name: '39', index: 39 },
   { id: '40', name: '40', index: 40 },
-  { id: 'saareke-1', name: 'Saareke 1', firstPress: 'Olohuone kattovalo 1', secondPress: 'Olohuone kattovalo 2', index: 41 },
-  { id: 'saareke-2', name: 'Saareke 2', firstPress: 'Olohuone LED', index: 42 },
+  { id: 'saareke-1', name: 'Saareke 1', firstPress: 'Olohuone kattovalo', secondPress: 'Kodinhoitohuone kattovalo', index: 41 },
+  { id: 'saareke-2', name: 'Saareke 2', firstPress: 'Olohuone ledi', index: 42 },
   { id: 'saareke-3', name: 'Saareke 3', firstPress: 'Olohuone ikkuna', index: 43 },
   { id: 'saareke-4', name: 'Saareke 4', firstPress: 'Ruokailu ikkuna', secondPress: 'Keittiö ikkunavalo', index: 44 },
-  { id: 'saareke-5', name: 'Saareke 5', firstPress: 'Keittiö LED', index: 45 },
+  { id: 'saareke-5', name: 'Saareke 5', firstPress: 'Keittiö katto', index: 45 },
   { id: 'saareke-6', name: 'Saareke 6', firstPress: 'Keittiö kaapisto ala', index: 46 },
-  { id: 'saareke-7', name: 'Saareke 7', firstPress: 'Keittiö kattovalo', index: 47 },
+  { id: 'saareke-7', name: 'Saareke 7', firstPress: 'Keittiö Kattovalo', index: 47 },
   { id: 'saareke-8', name: 'Saareke 8', firstPress: 'Ruokailu', index: 48 },
   { id: 'autokatos-1', name: 'Autokatos 1', firstPress: 'Sisäänkäynti', index: 49 },
   { id: 'autokatos-2', name: 'Autokatos 2', firstPress: 'Autokatos', index: 50 },
-  { id: 'ulkovarasto', name: 'Ulkovarasto', firstPress: 'Ulkovarasto', index: 51 },
+  { id: 'ulkovarasto', name: 'Ulkovarasto', firstPress: 'Varasto', index: 51 },
   { id: '52', name: '52', index: 52 },
   { id: '53', name: '53', index: 53 },
   { id: '54', name: '54', index: 54 },
@@ -200,6 +208,12 @@ export const lightSwitches: Record<string, number> = Object.fromEntries(
 
 export const lightSwitchNames: Record<number, string> = Object.fromEntries(
   lightSwitchList.map(s => [s.index, s.name])
+);
+
+// Maps PLC dropdown index → the text the PLC shows in the dropdown/header for that position.
+// Falls back to name when no plcLabel is set (the two match for most entries).
+export const lightSwitchPlcLabels: Record<number, string> = Object.fromEntries(
+  lightSwitchList.map(s => [s.index, (s as { plcLabel?: string }).plcLabel ?? s.name])
 );
 
 export const lightSwitchById: Record<string, typeof lightSwitchList[0]> = Object.fromEntries(
