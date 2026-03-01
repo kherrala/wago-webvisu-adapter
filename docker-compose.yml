@@ -22,7 +22,7 @@ services:
       - POLL_INTERVAL_MS=2000
       - POLL_CYCLE_DELAY_MS=30000
     volumes:
-      - wago-data:/data
+      - ./data:/data
     # 2gb SHM for Playwright mode, 64mb is enough for protocol mode
     shm_size: '${SHM_SIZE:-64m}'
     # Security options for Chrome
@@ -87,12 +87,12 @@ services:
       - DISPLAY=${DISPLAY:-:0}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
-      - wago-data:/data
+      - ./data:/data
     shm_size: '2gb'
     security_opt:
       - seccomp:unconfined
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-volumes:
-  wago-data:
+# Data directory ./data is bind-mounted to /data in the container.
+# Create it on the host if it doesn't exist: mkdir -p data

@@ -392,12 +392,92 @@ export class WebVisuProtocolClient {
     return this.handlePaintResponse(upResp);
   }
 
+  /**
+   * Click at (x, y) and collect all paint commands including continuations.
+   * mouseDown is sent immediately (fire-and-forget) to preserve the original timing.
+   * mouseUp response is followed through all continuations.
+   * Returns all paint commands collected.
+   */
+  async clickAndCollect(x: number, y: number): Promise<PaintCommand[]> {
+    this.ensureConnected();
+
+    // Skip mouseMove if already at the target position.
+    if (x !== this.lastMouseX || y !== this.lastMouseY) {
+      await this.mouseMove(x, y);
+    }
+
+    // MouseDown — fire and forget; preserves original timing so the PLC processes
+    // mouseDown+mouseUp as a complete gesture and renders on the mouseUp continuation
+    await this.sendRaw(buildMouseDown(this.clientId, x, y, this.sessionId));
+
+    await this.delay(this.config.postClickDelay);
+
+    // MouseUp — collect with continuations; the PLC renders the click result here
+    const { allCommands } = await this.sendEventAndCollect(
+      buildMouseUp(this.clientId, x, y, this.sessionId)
+    );
+    return allCommands;
+  }
+
+  /**
+   * Press mouseDown and collect its response, then send mouseUp and collect its response.
+   * Use when the control renders on mouseDown (e.g. dropdown arrow opening the list).
+   * Returns combined commands from both events.
+   */
+  async pressAndCollect(x: number, y: number): Promise<PaintCommand[]> {
+    this.ensureConnected();
+
+    // Skip mouseMove if already at the target position.
+    if (x !== this.lastMouseX || y !== this.lastMouseY) {
+      await this.mouseMove(x, y);
+    }
+
+    // MouseDown — collect; dropdown lists render when the button is pressed
+    const { allCommands: downCommands } = await this.sendEventAndCollect(
+      buildMouseDown(this.clientId, x, y, this.sessionId)
+    );
+
+    await this.delay(this.config.postClickDelay);
+
+    // MouseUp — collect; may have additional commands
+    const { allCommands: upCommands } = await this.sendEventAndCollect(
+      buildMouseUp(this.clientId, x, y, this.sessionId)
+    );
+    return [...downCommands, ...upCommands];
+  }
+
+  /**
+   * Send a mouseUp at (x, y) and collect all paint commands including continuations.
+   * Used by doDrag to capture the scroll result from the final mouseUp.
+   */
+  async mouseUpAndCollect(x: number, y: number): Promise<PaintCommand[]> {
+    this.ensureConnected();
+    const { allCommands } = await this.sendEventAndCollect(
+      buildMouseUp(this.clientId, x, y, this.sessionId)
+    );
+    return allCommands;
+  }
+
   async mouseMove(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
     const resp = await this.sendRaw(buildMouseMove(this.clientId, x, y, this.sessionId));
     this.lastMouseX = x;
     this.lastMouseY = y;
     return this.handlePaintResponse(resp);
+  }
+
+  /**
+   * Send a mouseMove at (x, y) and collect all paint commands including continuations.
+   * Used for the final drag step to capture scroll state rendered at the destination position.
+   */
+  async mouseMoveAndCollect(x: number, y: number): Promise<PaintCommand[]> {
+    this.ensureConnected();
+    const { allCommands } = await this.sendEventAndCollect(
+      buildMouseMove(this.clientId, x, y, this.sessionId)
+    );
+    this.lastMouseX = x;
+    this.lastMouseY = y;
+    return allCommands;
   }
 
   async mouseDown(x: number, y: number): Promise<PaintDataResponse> {

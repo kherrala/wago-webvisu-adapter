@@ -109,6 +109,8 @@ export interface ProtocolDebugRendererOptions {
   maxFrames: number;
   minIntervalMs: number;
   includeEmptyFrames: boolean;
+  /** When true, skip all disk I/O. The surface still accumulates commands for on-demand renderPreview(). */
+  noDisk?: boolean;
   imageSource?: {
     enabled: boolean;
     host: string;
@@ -161,42 +163,48 @@ export class ProtocolDebugRenderer {
       })
       : null;
 
-    const stamp = this.formatFileTimestamp(new Date());
-    this.sessionDir = path.resolve(this.options.outputDir, `session-${stamp}`);
-    fs.mkdirSync(this.sessionDir, { recursive: true });
-    this.timelinePath = path.join(this.sessionDir, 'timeline.ndjson');
     this.surface = new PixelSurface(
       this.options.width,
       this.options.height,
       this.backgroundColor,
     );
-    const sessionMeta = {
-      startedAt: new Date().toISOString(),
-      outputDir: this.sessionDir,
-      width: this.options.width,
-      height: this.options.height,
-      maxFrames: this.options.maxFrames,
-      minIntervalMs: this.options.minIntervalMs,
-      includeEmptyFrames: this.options.includeEmptyFrames,
-      imageSource: this.imageSource
-        ? {
-          enabled: this.imageSource.enabled,
-          host: this.imageSource.host,
-          port: this.imageSource.port,
-          basePath: this.imageSource.basePath,
-          timeoutMs: this.imageSource.timeoutMs,
-        }
-        : null,
-    };
-    fs.writeFileSync(path.join(this.sessionDir, 'session.json'), JSON.stringify(sessionMeta, null, 2));
 
-    logger.info({
-      dir: this.sessionDir,
-      width: this.options.width,
-      height: this.options.height,
-      maxFrames: this.options.maxFrames,
-      minIntervalMs: this.options.minIntervalMs,
-    }, 'Protocol paint debug renderer enabled');
+    if (this.options.noDisk) {
+      this.sessionDir = '';
+      this.timelinePath = '';
+      logger.debug({ width: this.options.width, height: this.options.height }, 'Protocol paint renderer initialized (no-disk mode)');
+    } else {
+      const stamp = this.formatFileTimestamp(new Date());
+      this.sessionDir = path.resolve(this.options.outputDir, `session-${stamp}`);
+      fs.mkdirSync(this.sessionDir, { recursive: true });
+      this.timelinePath = path.join(this.sessionDir, 'timeline.ndjson');
+      const sessionMeta = {
+        startedAt: new Date().toISOString(),
+        outputDir: this.sessionDir,
+        width: this.options.width,
+        height: this.options.height,
+        maxFrames: this.options.maxFrames,
+        minIntervalMs: this.options.minIntervalMs,
+        includeEmptyFrames: this.options.includeEmptyFrames,
+        imageSource: this.imageSource
+          ? {
+            enabled: this.imageSource.enabled,
+            host: this.imageSource.host,
+            port: this.imageSource.port,
+            basePath: this.imageSource.basePath,
+            timeoutMs: this.imageSource.timeoutMs,
+          }
+          : null,
+      };
+      fs.writeFileSync(path.join(this.sessionDir, 'session.json'), JSON.stringify(sessionMeta, null, 2));
+      logger.info({
+        dir: this.sessionDir,
+        width: this.options.width,
+        height: this.options.height,
+        maxFrames: this.options.maxFrames,
+        minIntervalMs: this.options.minIntervalMs,
+      }, 'Protocol paint debug renderer enabled');
+    }
   }
 
   getSessionDir(): string {
@@ -246,6 +254,20 @@ export class ProtocolDebugRenderer {
     }
 
     this.lastCapturedAtMs = frame.capturedAtMs;
+
+    if (this.options.noDisk) {
+      // In no-disk mode: accumulate commands on surface for on-demand renderPreview().
+      // No PNG is written to disk. Serialise via writeQueue to keep order.
+      const commands = [...frame.commands];
+      this.writeQueue = this.writeQueue
+        .then(() => this.applyCommands(commands))
+        .then(() => {})
+        .catch((error) => {
+          logger.debug({ error }, 'Failed to apply commands in no-disk renderer');
+        });
+      return;
+    }
+
     const index = ++this.frameCount;
     const snapshot: ProtocolPaintFrame = {
       ...frame,
@@ -264,17 +286,19 @@ export class ProtocolDebugRenderer {
   async close(): Promise<void> {
     this.closed = true;
     await this.writeQueue;
-    const summary = {
-      finishedAt: new Date().toISOString(),
-      capturedFrames: this.frameCount,
-      droppedFrames: this.droppedFrames,
-      skippedDuplicateFrames: this.skippedDuplicateFrames,
-      latestFrameAvailable: this.latestPng !== null,
-    };
-    try {
-      await fs.promises.writeFile(path.join(this.sessionDir, 'summary.json'), JSON.stringify(summary, null, 2));
-    } catch (error) {
-      logger.warn({ error }, 'Failed to write protocol debug renderer summary');
+    if (!this.options.noDisk) {
+      const summary = {
+        finishedAt: new Date().toISOString(),
+        capturedFrames: this.frameCount,
+        droppedFrames: this.droppedFrames,
+        skippedDuplicateFrames: this.skippedDuplicateFrames,
+        latestFrameAvailable: this.latestPng !== null,
+      };
+      try {
+        await fs.promises.writeFile(path.join(this.sessionDir, 'summary.json'), JSON.stringify(summary, null, 2));
+      } catch (error) {
+        logger.warn({ error }, 'Failed to write protocol debug renderer summary');
+      }
     }
     this.imageSourceAgent?.destroy();
   }

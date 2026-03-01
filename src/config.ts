@@ -42,6 +42,7 @@ export const config = {
     dropdownScrollTimeoutMs: parseInt(process.env.PROTOCOL_DROPDOWN_SCROLL_TIMEOUT_MS || '5000', 10),
     dropdownScrollPollIntervalMs: parseInt(process.env.PROTOCOL_DROPDOWN_SCROLL_POLL_INTERVAL_MS || '0', 10),
     dropdownItemClickYOffset: parseInt(process.env.PROTOCOL_DROPDOWN_ITEM_CLICK_Y_OFFSET || '2', 10),
+    scrollApproach: (process.env.PROTOCOL_SCROLL_APPROACH || 'arrow') as 'drag' | 'arrow',
     scrollSettleDelayMs: parseInt(process.env.PROTOCOL_SCROLL_SETTLE_DELAY_MS || '0', 10),
     dragStartHoldMs: parseInt(process.env.PROTOCOL_DRAG_START_HOLD_MS || '60', 10),
     dragStepDelayMs: parseInt(process.env.PROTOCOL_DRAG_STEP_DELAY_MS || '45', 10),
@@ -62,10 +63,10 @@ export const config = {
     postSelectDelay: 100,
     debugHttp: process.env.PROTOCOL_DEBUG_HTTP === 'true',
     sessionTraceEnabled: process.env.PROTOCOL_SESSION_TRACE !== 'false',
-    sessionTraceDir: process.env.PROTOCOL_SESSION_TRACE_DIR || './data/protocol-trace',
+    sessionTraceDir: process.env.PROTOCOL_SESSION_TRACE_DIR || '/data/protocol-trace',
     logRawFrameData: process.env.PROTOCOL_LOG_RAW_FRAME_DATA === 'true',
     debugRenderEnabled: process.env.PROTOCOL_DEBUG_RENDER === 'true',
-    debugRenderDir: process.env.PROTOCOL_DEBUG_RENDER_DIR || './data/protocol-render-debug',
+    debugRenderDir: process.env.PROTOCOL_DEBUG_RENDER_DIR || '/data/protocol-render-debug',
     debugRenderMaxFrames: parseInt(process.env.PROTOCOL_DEBUG_RENDER_MAX_FRAMES || '400', 10),
     debugRenderMinIntervalMs: parseInt(process.env.PROTOCOL_DEBUG_RENDER_MIN_INTERVAL_MS || '0', 10),
     debugRenderIncludeEmptyFrames: process.env.PROTOCOL_DEBUG_RENDER_INCLUDE_EMPTY !== 'false',
@@ -119,7 +120,7 @@ export const uiCoordinates = {
     },
     // ESC button on the CoDeSys numeric keypad dialog (used for dismissal)
     keypadEscButton: { x: 714, y: 583 },
-    // Scrollbar for dropdown (when open) - on right edge of dropdown list
+    // Scrollbar for dropdown (when open) - on right edge of dropdown list.
     scrollbar: {
       x: 528,
       // Range to scan for detecting the thumb (full track area including arrows)

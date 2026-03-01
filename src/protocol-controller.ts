@@ -2,6 +2,7 @@
 // Strategy:
 // - Execute one forced render (viewport event) after each UI step.
 // - Use only explicit lamp image IDs for status detection.
+// - Reconnect automatically when consecutive empty renders exceed threshold.
 
 import {
   config,
@@ -19,7 +20,6 @@ import {
   ImageDrawCommand,
   extractDrawImages,
   extractTextLabels,
-  parsePaintCommands,
 } from './protocol/paint-commands';
 import { ProtocolDebugRenderer } from './protocol/debug-renderer';
 import pino from 'pino';
@@ -34,19 +34,8 @@ export class ProtocolController implements IWebVisuController {
   private static readonly DEFAULT_INITIAL_RENDER_TIMEOUT_MS = 7000;
   private static readonly MIN_INITIAL_RENDER_POLL_INTERVAL_MS = 50;
   private static readonly DEFAULT_INITIAL_RENDER_POLL_INTERVAL_MS = 200;
-  private static readonly MIN_DROPDOWN_OPEN_TIMEOUT_MS = 1000;
-  private static readonly DEFAULT_DROPDOWN_OPEN_TIMEOUT_MS = 4000;
-  private static readonly MIN_DROPDOWN_OPEN_POLL_INTERVAL_MS = 50;
-  private static readonly DEFAULT_DROPDOWN_OPEN_POLL_INTERVAL_MS = 180;
-  private static readonly MIN_SELECTION_VERIFY_TIMEOUT_MS = 0;
-  private static readonly DEFAULT_SELECTION_VERIFY_TIMEOUT_MS = 2500;
-  private static readonly MIN_SELECTION_VERIFY_POLL_INTERVAL_MS = 50;
-  private static readonly DEFAULT_SELECTION_VERIFY_POLL_INTERVAL_MS = 120;
-  private static readonly MIN_DROPDOWN_SCROLL_TIMEOUT_MS = 800;
-  private static readonly DEFAULT_DROPDOWN_SCROLL_TIMEOUT_MS = 2400;
-  private static readonly MIN_DROPDOWN_SCROLL_POLL_INTERVAL_MS = 50;
-  private static readonly DEFAULT_DROPDOWN_SCROLL_POLL_INTERVAL_MS = 120;
-  private static readonly DEFAULT_MAX_LIGHT_SELECTION_ATTEMPTS = 3;
+  private static readonly RECONNECT_EMPTY_THRESHOLD = 10;
+  private static readonly RECONNECT_COOLDOWN_MS = 30_000;
 
   private client: WebVisuProtocolClient;
   private debugRenderer: ProtocolDebugRenderer | null = null;
@@ -54,46 +43,50 @@ export class ProtocolController implements IWebVisuController {
   private operationQueue: Promise<unknown> = Promise.resolve();
   private pendingOperations = 0;
 
-  private napitTabKnownActive = false;
-  private napitTabVerifiedAt = 0;
-  private napitTabClickHint: { x: number; y: number; source: string } | null = null;
-  private napitEnsureBackoffUntil = 0;
-
   // Dropdown scroll tracking.
   private dropdownFirstVisible = 0;
-  private dropdownStateUnknown = false;
   private dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
   private dropdownLastSnapshotLabels: Array<{ text: string; index: number; top: number; bottom: number; row: number }> = [];
 
   // Cache status by light/indicator for cases where PLC does not redraw unchanged icon.
   private lastStatusByIndicator = new Map<string, boolean>();
 
+  // Reconnection state.
+  private consecutiveEmptyRenders = 0;
+  private lastReconnectAt = 0;
+
   constructor() {
     const protocolHost = config.protocol?.host || '192.168.1.10';
     const protocolPort = config.protocol?.port || 443;
-    if (config.protocol?.debugRenderEnabled) {
-      try {
-        this.debugRenderer = new ProtocolDebugRenderer({
-          outputDir: config.protocol?.debugRenderDir || './data/protocol-render-debug',
-          width: config.browser.viewport.width,
-          height: config.browser.viewport.height,
-          maxFrames: config.protocol?.debugRenderMaxFrames ?? 400,
-          minIntervalMs: config.protocol?.debugRenderMinIntervalMs ?? 0,
-          includeEmptyFrames: config.protocol?.debugRenderIncludeEmptyFrames ?? true,
-          imageSource: {
-            enabled: config.protocol?.debugRenderFetchImages ?? true,
-            host: protocolHost,
-            port: protocolPort,
-            rejectUnauthorized: false,
-            referer: `https://${protocolHost}/webvisu/webvisu.htm`,
-            basePath: '/webvisu',
-            timeoutMs: config.protocol?.debugRenderImageFetchTimeoutMs ?? 1200,
-          },
-        });
-      } catch (error) {
-        logger.warn({ error }, 'Failed to initialize protocol debug renderer; continuing without rendered screenshots');
-        this.debugRenderer = null;
-      }
+    const debugRenderEnabled = config.protocol?.debugRenderEnabled ?? false;
+    try {
+      this.debugRenderer = new ProtocolDebugRenderer({
+        // noDisk=true when debug render is not explicitly enabled — the renderer still
+        // accumulates paint state in memory so getRenderedUiImage() always works.
+        noDisk: !debugRenderEnabled,
+        outputDir: config.protocol?.debugRenderDir || '/data/protocol-render-debug',
+        width: config.browser.viewport.width,
+        height: config.browser.viewport.height,
+        maxFrames: config.protocol?.debugRenderMaxFrames ?? 400,
+        minIntervalMs: config.protocol?.debugRenderMinIntervalMs ?? 0,
+        includeEmptyFrames: config.protocol?.debugRenderIncludeEmptyFrames ?? true,
+        ...(debugRenderEnabled
+          ? {
+            imageSource: {
+              enabled: config.protocol?.debugRenderFetchImages ?? true,
+              host: protocolHost,
+              port: protocolPort,
+              rejectUnauthorized: false,
+              referer: `https://${protocolHost}/webvisu/webvisu.htm`,
+              basePath: '/webvisu',
+              timeoutMs: config.protocol?.debugRenderImageFetchTimeoutMs ?? 1200,
+            },
+          }
+          : {}),
+      });
+    } catch (error) {
+      logger.warn({ error }, 'Failed to initialize protocol debug renderer; rendered-ui endpoint will return empty');
+      this.debugRenderer = null;
     }
 
     this.client = new WebVisuProtocolClient({
@@ -105,11 +98,12 @@ export class ProtocolController implements IWebVisuController {
       postSelectDelay: config.protocol?.postSelectDelay || 100,
       debugHttp: config.protocol?.debugHttp || false,
       sessionTraceEnabled: config.protocol?.sessionTraceEnabled ?? true,
-      sessionTraceDir: config.protocol?.sessionTraceDir || './data/protocol-trace',
+      sessionTraceDir: config.protocol?.sessionTraceDir || '/data/protocol-trace',
       logRawFrameData: config.protocol?.logRawFrameData || false,
       postDataInHeader: config.protocol?.postDataInHeader || 'auto',
       deviceUsername: config.protocol?.deviceUsername || '',
       devicePassword: config.protocol?.devicePassword || '',
+      // Always feed paint frames into the renderer so the surface state stays current.
       onPaintFrame: this.debugRenderer
         ? (frame) => {
           this.debugRenderer?.record(frame);
@@ -128,11 +122,10 @@ export class ProtocolController implements IWebVisuController {
     await this.client.connect();
 
     // Wait until initial screen has visible paint data before any tab click.
-    const initialCommands = await this.waitForInitialRenderReady();
-    this.captureNapitHint(initialCommands);
+    await this.waitForInitialRenderReady();
 
     logger.info('Navigating to Napit tab...');
-    await this.ensureNapitTabActive(true, 'initialize');
+    await this.navigateToNapitTab();
 
     this.initialized = true;
     logger.info('Protocol controller initialized successfully');
@@ -148,21 +141,19 @@ export class ProtocolController implements IWebVisuController {
       }
     }
     this.initialized = false;
-    this.napitTabKnownActive = false;
-    this.napitTabVerifiedAt = 0;
-    this.napitTabClickHint = null;
-    this.napitEnsureBackoffUntil = 0;
     this.dropdownFirstVisible = 0;
-    this.dropdownStateUnknown = false;
     this.dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
     this.dropdownLastSnapshotLabels = [];
     this.lastStatusByIndicator.clear();
+    this.consecutiveEmptyRenders = 0;
     logger.info('Protocol controller closed');
   }
 
   resetDropdownState(): void {
-    this.dropdownStateUnknown = true;
-    logger.info('Dropdown state marked as unknown - will scroll to top on next selection');
+    this.dropdownFirstVisible = 0;
+    this.dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
+    this.dropdownLastSnapshotLabels = [];
+    logger.info('Dropdown state reset to top');
   }
 
   getPendingOperationCount(): number {
@@ -183,16 +174,13 @@ export class ProtocolController implements IWebVisuController {
     }
 
     if (tabName === 'napit') {
-      await this.ensureNapitTabActive(false, 'navigateToTab');
+      await this.navigateToNapitTab();
       return;
     }
 
     logger.info(`Navigating to tab: ${tabName} at (${coords.x}, ${coords.y})`);
-    const clickPaint = await this.client.click(coords.x, coords.y);
-    const clickCommands = this.parseCommandsFromPaintResponse(clickPaint);
-    const forcedCommands = await this.forceRenderOnce(`navigate:${tabName}`);
-    this.captureNapitHint([...clickCommands, ...forcedCommands]);
-    this.napitTabKnownActive = false;
+    await this.client.clickAndCollect(coords.x, coords.y);
+    await this.forceRenderOnce(`navigate:${tabName}`);
   }
 
   async selectLightSwitch(lightId: string): Promise<void> {
@@ -202,87 +190,127 @@ export class ProtocolController implements IWebVisuController {
     });
   }
 
-  private async doSelectLightSwitch(lightId: string, selectionAttempt: number = 1): Promise<PaintCommand[]> {
-    await this.ensureNapitTabActive(false, `select:${lightId}`);
-
+  private async doSelectLightSwitch(lightId: string): Promise<PaintCommand[]> {
     const index = lightSwitches[lightId];
     if (index === undefined) {
       throw new Error(`Unknown light switch: ${lightId}. Valid IDs: ${Object.keys(lightSwitches).join(', ')}`);
     }
-    const maxSelectionAttempts = Math.max(
-      1,
-      config.protocol?.maxSelectionAttempts ?? ProtocolController.DEFAULT_MAX_LIGHT_SELECTION_ATTEMPTS,
-    );
-    const retrySelection = async (reason: string): Promise<PaintCommand[]> => {
-      this.dropdownStateUnknown = true;
-      this.napitTabKnownActive = false;
-      if (selectionAttempt < maxSelectionAttempts) {
-        logger.warn({ lightId, index, reason, selectionAttempt, maxSelectionAttempts }, 'Retrying light selection');
-        return this.doSelectLightSwitch(lightId, selectionAttempt + 1);
-      }
-      throw new Error(`${reason}: light=${lightId}, index=${index}`);
-    };
 
-    logger.info(`Selecting light switch: ${lightId} (index: ${index}, attempt: ${selectionAttempt})`);
-
-    const clickPaint = await this.client.click(
-      uiCoordinates.lightSwitches.dropdownArrow.x,
-      uiCoordinates.lightSwitches.dropdownArrow.y
-    );
-    const clickSeedCommands = this.parseCommandsFromPaintResponse(clickPaint);
-    const dropdownOpen = await this.waitForDropdownOpen(lightId, clickSeedCommands);
-    const dropdownOpenCommands = [...dropdownOpen.commands];
-    if (!dropdownOpen.detected) {
-      if (this.detectKeypadDialog(dropdownOpenCommands)) {
-        await this.dismissKeypadDialog();
-        return retrySelection('Keypad dialog detected during dropdown open');
-      }
-      return retrySelection('Dropdown open render not detected');
+    try {
+      return await this.doSelectLightSwitchOnce(lightId, index);
+    } catch (error) {
+      logger.warn({ error, lightId }, 'Selection failed, reconnecting and retrying once');
+      await this.doReconnect('select-retry');
+      return this.doSelectLightSwitchOnce(lightId, index);
     }
-    this.syncDropdownStateFromCommands(dropdownOpenCommands, `dropdown-open:${lightId}`);
+  }
+
+  private async doSelectLightSwitchOnce(lightId: string, index: number): Promise<PaintCommand[]> {
+    logger.info(`Selecting light switch: ${lightId} (index: ${index})`);
+
+    // Step 1: Press dropdown arrow and collect.
+    // The dropdown opens on mouseDown. pressAndCollect captures mouseDown + mouseUp responses.
+    // Assumption: dropdown is closed at operation start (operations are serialized).
+    const allDropdownCommands: PaintCommand[] = [];
+
+    const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
+    const arrowY = uiCoordinates.lightSwitches.dropdownArrow.y;
+
+    const firstClickCommands = await this.client.pressAndCollect(arrowX, arrowY);
+    allDropdownCommands.push(...firstClickCommands);
 
     const dropdownConfig = uiCoordinates.lightSwitches.dropdownList;
     const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
-    const selectionSettleDelayMs = Math.max(0, config.protocol?.selectionSettleDelayMs ?? 220);
-    const totalItems = lightSwitchList.length;
-    const visibleItems = dropdownConfig.visibleItems;
-    const maxFirstVisible = Math.max(0, totalItems - visibleItems);
-    const stepCommands: PaintCommand[] = [...dropdownOpenCommands];
-    let usedScrollbarDrag = false;
+    const maxFirstVisible = this.getDropdownMaxFirstVisible();
 
-    if (this.dropdownStateUnknown) {
-      logger.info('Dropdown state unknown - scrolling to top');
-      await this.doDrag(
-        scrollbarConfig.x, scrollbarConfig.thumbRange.bottomY,
-        scrollbarConfig.x, scrollbarConfig.thumbRange.topY
-      );
-      usedScrollbarDrag = true;
-      let synced = false;
-      for (let probe = 1; probe <= 3; probe++) {
-        const probeCommands = await this.forceRenderOnce(`dropdown-reset-probe:${lightId}:${probe}`);
-        stepCommands.push(...probeCommands);
-        synced = this.syncDropdownStateFromCommands(probeCommands, `dropdown-reset-probe:${lightId}:${probe}`) || synced;
-        if (synced && this.dropdownFirstVisible <= 0) {
-          break;
+    // Step 2: Dropdown is now open at position 0.
+    // The PLC always opens the dropdown at the top on a fresh press — no sync needed.
+    // Arrow clicks are trusted by count; we update dropdownFirstVisible directly.
+    this.dropdownFirstVisible = 0;
+    this.dropdownLastSnapshotLabels = [];
+
+    const stepCommands: PaintCommand[] = [...allDropdownCommands];
+
+    // Step 3: If target not visible, scroll to bring it into view.
+    if (!this.isDropdownIndexVisible(index)) {
+      const targetFirstVisible = this.getTargetFirstVisible(index, maxFirstVisible);
+      const delta = targetFirstVisible - this.dropdownFirstVisible;
+      const absDelta = Math.abs(delta);
+      const scrollApproach = config.protocol?.scrollApproach ?? 'arrow';
+
+      if (scrollApproach === 'drag') {
+        // Drag the scrollbar thumb to the target position. The mouseUp on the thumb
+        // CLOSES the dropdown (observed behavior). After drag, reopen to verify scroll position.
+        const dragStartHoldMs = config.protocol?.dragStartHoldMs ?? 60;
+        const dragStepDelayMs = config.protocol?.dragStepDelayMs ?? 45;
+        const dragEndHoldMs = config.protocol?.dragEndHoldMs ?? 50;
+        const scrollbarX = scrollbarConfig.x;
+        const currentHandleY = Math.round(this.getDropdownScrollY(this.dropdownFirstVisible));
+        const targetHandleY = Math.round(this.getDropdownScrollY(targetFirstVisible));
+
+        logger.info({
+          lightId, index,
+          currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible,
+          delta, direction: delta >= 0 ? 'down' : 'up',
+          currentHandleY, targetHandleY,
+        }, 'Dragging scrollbar thumb');
+
+        await this.client.mouseDown(scrollbarX, currentHandleY);
+        await this.delay(dragStartHoldMs);
+        const step = delta > 0 ? 4 : -4;
+        for (let y = currentHandleY + step; delta > 0 ? y < targetHandleY : y > targetHandleY; y += step) {
+          await this.client.mouseMove(scrollbarX, y);
+          await this.delay(dragStepDelayMs);
         }
+        await this.delay(dragEndHoldMs);
+        const dragUpCmds = await this.client.mouseUpAndCollect(scrollbarX, targetHandleY);
+        stepCommands.push(...dragUpCmds);
+
+        // Dropdown CLOSED after drag mouseUp. Reopen to proceed with item click.
+        const reopenCmds = await this.client.pressAndCollect(arrowX, arrowY);
+        stepCommands.push(...reopenCmds);
+        // Trust the drag geometry — set tracked position from target.
+        this.dropdownFirstVisible = targetFirstVisible;
+      } else {
+        // Arrow button approach: click scrollbar arrow buttons, one step per click.
+        // Arrow clicks return only scrollbar-thumb repaints (no text labels).
+        // Trust the click count — update tracked position directly, no re-read needed.
+        const scrollArrowX = scrollbarConfig.x;
+        const downArrowY = scrollbarConfig.scanRange.bottomY;
+        const upArrowY = scrollbarConfig.scanRange.topY;
+        const arrowY = delta >= 0 ? downArrowY : upArrowY;
+
+        logger.info({
+          lightId, index,
+          currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible,
+          delta, direction: delta >= 0 ? 'down' : 'up',
+          clicks: absDelta,
+        }, 'Scrolling dropdown via arrow button');
+
+        await this.client.mouseMove(scrollArrowX, scrollbarConfig.thumbRange.topY);
+        for (let click = 0; click < absDelta; click++) {
+          await this.client.mouseDown(scrollArrowX, arrowY);
+          const upCmds = await this.client.mouseUpAndCollect(scrollArrowX, arrowY);
+          stepCommands.push(...upCmds);
+        }
+
+        // Trust the click count — update position directly without re-reading labels.
+        this.dropdownFirstVisible = targetFirstVisible;
+      }
+
+      if (!this.isDropdownIndexVisible(index)) {
+        throw new Error(`Scroll failed (${scrollApproach}): light=${lightId}, index=${index}, firstVisible=${this.dropdownFirstVisible}, targetFirstVisible=${targetFirstVisible}`);
       }
     }
 
-    const scrollResult = await this.ensureDropdownIndexVisible(lightId, index, maxFirstVisible);
-    stepCommands.push(...scrollResult.commands);
-    if (scrollResult.usedDrag) {
-      usedScrollbarDrag = true;
-    }
-    if (!scrollResult.visible) {
-      return retrySelection('Dropdown scroll did not expose target item');
-    }
-
+    // Step 4: Calculate item click Y
     const positionInView = index - this.dropdownFirstVisible;
-    const dynamicClickPoint = this.resolveDropdownItemClickPointFromSnapshot(index, positionInView);
-    if (!dynamicClickPoint && (positionInView < 0 || positionInView >= visibleItems)) {
-      return retrySelection(`Dropdown row out of view after scroll (position=${positionInView})`);
+    const visibleItems = dropdownConfig.visibleItems;
+    if (positionInView < 0 || positionInView >= visibleItems) {
+      throw new Error(`Dropdown row out of view after scroll: light=${lightId}, position=${positionInView}`);
     }
 
+    const dynamicClickPoint = this.resolveDropdownItemClickPointFromSnapshot(index, positionInView);
     const itemClickYOffset = config.protocol?.dropdownItemClickYOffset ?? 2;
     let itemY: number;
     if (dynamicClickPoint) {
@@ -297,6 +325,7 @@ export class ProtocolController implements IWebVisuController {
         rowBottomY,
       );
     }
+
     logger.info({
       lightId,
       index,
@@ -306,93 +335,12 @@ export class ProtocolController implements IWebVisuController {
       dynamicRow: dynamicClickPoint?.row ?? null,
     }, 'Selecting dropdown item');
 
-    const selectPaint = await this.client.click(dropdownConfig.itemX, itemY);
-    const selectCommands = this.parseCommandsFromPaintResponse(selectPaint);
-    const selectionCommands = await this.forceRenderOnce(`dropdown-select:${lightId}`);
-    if (selectionSettleDelayMs > 0) {
-      await this.delay(selectionSettleDelayMs);
-    }
-    const settledCommands = await this.forceRenderOnce(`dropdown-select-settle:${lightId}`);
-    selectionCommands.push(...settledCommands);
-
-    const verificationSeed = [
-      ...selectCommands,
-      ...selectionCommands,
-    ];
-
-    const expectedLabel = this.getExpectedLightLabel(lightId, index);
-    const verification = await this.verifyDropdownSelection(lightId, index, verificationSeed);
-    const combinedCommands = [
-      ...stepCommands,
-      ...verification.commands,
-    ];
-    if (!verification.ok) {
-      const hasVerificationText = !!verification.headerText || !!verification.firstPressText;
-      if (hasVerificationText) {
-        logger.warn({
-          lightId,
-          index,
-          expectedLabel,
-          actualLabel: verification.headerText,
-          actualFirstPress: verification.firstPressText,
-          verifyAttempts: verification.attempts,
-          verifyElapsedMs: verification.elapsedMs,
-        }, 'Dropdown selection verification failed');
-        return retrySelection(`Dropdown selection verification failed (actual="${verification.headerText ?? verification.firstPressText ?? 'unknown'}")`);
-      }
-      logger.warn({
-        lightId,
-        index,
-        expectedLabel,
-        verifyAttempts: verification.attempts,
-        verifyElapsedMs: verification.elapsedMs,
-      }, 'Dropdown verification returned no readable labels; proceeding with best effort');
-    } else if (verification.attempts > 0) {
-      logger.info({
-        lightId,
-        expectedLabel,
-        actualLabel: verification.headerText,
-        actualFirstPress: verification.firstPressText,
-        verifyAttempts: verification.attempts,
-        verifyElapsedMs: verification.elapsedMs,
-      }, 'Dropdown header verified');
-    }
+    // Step 5: Click item → collect commands
+    const selectCommands = await this.client.clickAndCollect(dropdownConfig.itemX, itemY);
+    stepCommands.push(...selectCommands);
 
     logger.info(`Light switch ${lightId} selected`);
-    return combinedCommands;
-  }
-
-  private async doDrag(fromX: number, fromY: number, toX: number, toY: number): Promise<void> {
-    logger.debug(`Dragging from (${fromX}, ${fromY}) to (${toX}, ${toY})`);
-    const scrollSettleDelayMs = Math.max(0, config.protocol?.scrollSettleDelayMs ?? 800);
-    const dragStartHoldMs = Math.max(0, config.protocol?.dragStartHoldMs ?? 60);
-    const dragStepDelayMs = Math.max(0, config.protocol?.dragStepDelayMs ?? 45);
-    const dragEndHoldMs = Math.max(0, config.protocol?.dragEndHoldMs ?? 50);
-
-    await this.client.mouseMove(fromX, fromY);
-    await this.client.mouseDown(fromX, fromY);
-    if (dragStartHoldMs > 0) {
-      await this.delay(dragStartHoldMs);
-    }
-
-    const steps = 4;
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const x = Math.round(fromX + (toX - fromX) * t);
-      const y = Math.round(fromY + (toY - fromY) * t);
-      await this.client.mouseMove(x, y);
-      if (dragStepDelayMs > 0) {
-        await this.delay(dragStepDelayMs);
-      }
-    }
-
-    if (dragEndHoldMs > 0) {
-      await this.delay(dragEndHoldMs);
-    }
-    await this.client.mouseUp(toX, toY);
-    if (scrollSettleDelayMs > 0) {
-      await this.delay(scrollSettleDelayMs);
-    }
+    return stepCommands;
   }
 
   async toggleLight(lightId: string, functionNumber: 1 | 2 = 1): Promise<void> {
@@ -402,11 +350,8 @@ export class ProtocolController implements IWebVisuController {
 
       await this.doSelectLightSwitch(lightId);
 
-      const togglePreClickDelayMs = Math.max(0, config.protocol?.togglePreClickDelayMs ?? 250);
       const togglePressHoldMs = Math.max(0, config.protocol?.togglePressHoldMs ?? 140);
       const togglePostClickDelayMs = Math.max(0, config.protocol?.togglePostClickDelayMs ?? 500);
-      const togglePostRenderPolls = Math.max(1, config.protocol?.togglePostRenderPolls ?? 2);
-      const togglePostRenderPollDelayMs = Math.max(0, config.protocol?.togglePostRenderPollDelayMs ?? 200);
 
       const firstButton = uiCoordinates.lightSwitches.ohjausButton;
       const lightSwitchUi = uiCoordinates.lightSwitches as typeof uiCoordinates.lightSwitches & {
@@ -421,11 +366,6 @@ export class ProtocolController implements IWebVisuController {
       if (functionNumber === 2 && !configuredSecondButton) {
         logger.warn({ lightId, x: targetButton.x, y: targetButton.y }, 'Function 2 toggle using estimated second button coordinate');
       }
-
-      if (togglePreClickDelayMs > 0) {
-        await this.delay(togglePreClickDelayMs);
-      }
-      await this.forceRenderOnce(`toggle-pre:${lightId}`);
 
       logger.info({
         lightId,
@@ -443,21 +383,15 @@ export class ProtocolController implements IWebVisuController {
       }
       await this.client.mouseUp(targetButton.x, targetButton.y);
 
-      let totalPostCommands = 0;
-      for (let poll = 1; poll <= togglePostRenderPolls; poll++) {
-        const waitMs = poll === 1 ? togglePostClickDelayMs : togglePostRenderPollDelayMs;
-        if (waitMs > 0) {
-          await this.delay(waitMs);
-        }
-        const postCommands = await this.forceRenderOnce(`toggle-post:${lightId}:${poll}`);
-        totalPostCommands += postCommands.length;
+      if (togglePostClickDelayMs > 0) {
+        await this.delay(togglePostClickDelayMs);
       }
+      const postCommands = await this.forceRenderOnce(`toggle-post:${lightId}`);
 
       logger.info({
         lightId,
         functionNumber,
-        postRenderPolls: togglePostRenderPolls,
-        totalPostCommands,
+        postCommandCount: postCommands.length,
       }, 'Toggle render settle complete');
 
       logger.info(`Light ${lightId} function ${functionNumber} toggled`);
@@ -478,7 +412,8 @@ export class ProtocolController implements IWebVisuController {
       const switchName = lightSwitchNames[index] || lightId;
 
       const selectionCommands = await this.doSelectLightSwitch(lightId);
-      const allCommands = await this.collectStatusCommands(lightId, selectionCommands);
+      const statusCommands = await this.forceRenderOnce(`status:${lightId}`);
+      const allCommands = [...selectionCommands, ...statusCommands];
 
       const indicatorImages = this.resolveIndicatorImages(allCommands);
 
@@ -592,8 +527,9 @@ export class ProtocolController implements IWebVisuController {
     if (!this.debugRenderer) {
       return null;
     }
-    const latest = this.debugRenderer.getLatestPng();
-    return latest ?? null;
+    // renderPreview([]) renders the current accumulated surface state without
+    // applying any new commands. Always returns a PNG even in no-disk mode.
+    return this.debugRenderer.renderPreview([]);
   }
 
   async isConnected(): Promise<boolean> {
@@ -633,37 +569,6 @@ export class ProtocolController implements IWebVisuController {
       .toLowerCase()
       .replace(/\x00+$/g, '')
       .trim();
-  }
-
-  private captureNapitHint(commands: PaintCommand[]): void {
-    const labels = extractTextLabels(commands);
-    const napitLabel = labels.find((label) => this.normalizeVisuText(label.text).includes('napit'));
-    if (!napitLabel) return;
-
-    const centerX = Math.round((napitLabel.left + napitLabel.right) / 2);
-    const centerY = Math.round((napitLabel.top + napitLabel.bottom) / 2);
-    this.napitTabClickHint = { x: centerX, y: centerY, source: `label:${napitLabel.text}` };
-  }
-
-  private parseCommandsFromPaintResponse(
-    paintResponse: { commands: Uint8Array } | null | undefined,
-  ): PaintCommand[] {
-    if (!paintResponse || !paintResponse.commands || paintResponse.commands.length === 0) {
-      return [];
-    }
-    try {
-      return parsePaintCommands(paintResponse.commands);
-    } catch (error) {
-      logger.debug({ error }, 'Failed to parse paint commands from event response');
-      return [];
-    }
-  }
-
-  private isNapitContentLabel(text: string): boolean {
-    const normalized = this.normalizeVisuText(text);
-    return normalized.includes('valitse valaisin')
-      || normalized.includes('1. painallus')
-      || normalized.includes('ohjaus');
   }
 
   private async waitForInitialRenderReady(): Promise<PaintCommand[]> {
@@ -728,93 +633,6 @@ export class ProtocolController implements IWebVisuController {
     return Math.max(minimumFirstVisible, Math.min(preferredFirstVisible, maxFirstVisible));
   }
 
-  private async ensureDropdownIndexVisible(
-    lightId: string,
-    index: number,
-    maxFirstVisible: number,
-  ): Promise<{ visible: boolean; commands: PaintCommand[]; usedDrag: boolean }> {
-    const commands: PaintCommand[] = [];
-    const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
-    const dragXCandidates = [
-      scrollbarConfig.x,
-      scrollbarConfig.x + 2,
-      scrollbarConfig.x - 2,
-      scrollbarConfig.x - 4,
-      scrollbarConfig.x - 6,
-      scrollbarConfig.x - 8,
-    ];
-    const timeoutMs = Math.max(
-      ProtocolController.MIN_DROPDOWN_SCROLL_TIMEOUT_MS,
-      config.protocol?.dropdownScrollTimeoutMs ?? ProtocolController.DEFAULT_DROPDOWN_SCROLL_TIMEOUT_MS,
-    );
-    const pollIntervalMs = Math.max(
-      ProtocolController.MIN_DROPDOWN_SCROLL_POLL_INTERVAL_MS,
-      config.protocol?.dropdownScrollPollIntervalMs ?? ProtocolController.DEFAULT_DROPDOWN_SCROLL_POLL_INTERVAL_MS,
-    );
-
-    if (this.isDropdownIndexVisible(index)) {
-      return { visible: true, commands, usedDrag: false };
-    }
-
-    const startedAt = Date.now();
-    const deadline = startedAt + timeoutMs;
-    let usedDrag = false;
-    let attempt = 0;
-
-    while (Date.now() <= deadline) {
-      attempt++;
-      const dragX = dragXCandidates[(attempt - 1) % dragXCandidates.length];
-      const baseTargetFirstVisible = this.getTargetFirstVisible(index, maxFirstVisible);
-      let targetFirstVisible = baseTargetFirstVisible;
-      const direction = index >= this.dropdownFirstVisible ? 1 : -1;
-
-      const currentScrollY = this.dropdownHandleCenterY || this.getDropdownScrollY(this.dropdownFirstVisible, maxFirstVisible);
-      if (Math.abs(currentScrollY - this.getDropdownScrollY(targetFirstVisible, maxFirstVisible)) < 0.5 && !this.isDropdownIndexVisible(index)) {
-        // When state and target collapse to the same Y while item is still not visible,
-        // nudge one row to force movement and refresh scrollbar tracking.
-        targetFirstVisible = Math.max(0, Math.min(maxFirstVisible, targetFirstVisible + direction));
-      }
-      const targetScrollY = this.getDropdownScrollY(targetFirstVisible, maxFirstVisible);
-
-      logger.info(
-        `Scrolling: firstVisible ${this.dropdownFirstVisible} -> ${targetFirstVisible}, baseTarget=${baseTargetFirstVisible}, dragX=${dragX}, scrollY ${currentScrollY.toFixed(1)} -> ${targetScrollY.toFixed(1)}`,
-      );
-      await this.doDrag(dragX, currentScrollY, dragX, targetScrollY);
-      usedDrag = true;
-
-      for (let probe = 1; probe <= 3; probe++) {
-        const probeCommands = await this.forceRenderOnce(`dropdown-scroll-probe:${lightId}:${attempt}:${probe}`);
-        commands.push(...probeCommands);
-        this.syncDropdownStateFromCommands(probeCommands, `dropdown-scroll-probe:${lightId}:${attempt}:${probe}`);
-
-        if (this.isDropdownIndexVisible(index)) {
-          return { visible: true, commands, usedDrag };
-        }
-
-      }
-
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        break;
-      }
-      await this.delay(Math.min(pollIntervalMs, remainingMs));
-    }
-
-    logger.warn({
-      lightId,
-      index,
-      firstVisible: this.dropdownFirstVisible,
-      elapsedMs: Date.now() - startedAt,
-      timeoutMs,
-    }, 'Dropdown index did not become visible');
-
-    return { visible: this.isDropdownIndexVisible(index), commands, usedDrag };
-  }
-
-  private getExpectedLightLabel(lightId: string, index: number): string {
-    return lightSwitchNames[index] || lightId;
-  }
-
   private resolveDropdownItemClickPointFromSnapshot(
     targetIndex: number,
     expectedRow: number,
@@ -833,150 +651,6 @@ export class ProtocolController implements IWebVisuController {
       x: dropdown.itemX,
       y: Math.round((best.top + best.bottom) / 2),
       row: best.row,
-    };
-  }
-
-  private extractDropdownHeaderText(commands: PaintCommand[]): string | null {
-    const dropdown = uiCoordinates.lightSwitches.dropdown;
-    const dropdownList = uiCoordinates.lightSwitches.dropdownList;
-    const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
-    const labels = extractTextLabels(commands);
-    const minLeft = Math.max(0, dropdown.x - 180);
-    const maxRight = arrowX - 12;
-    const minTop = Math.max(0, dropdown.y - 20);
-    const maxBottom = dropdownList.firstItemY - 2;
-
-    const candidates = labels
-      .filter((label) => label.left >= minLeft && label.right <= maxRight)
-      .filter((label) => label.top >= minTop && label.bottom <= maxBottom)
-      .map((label) => ({
-        text: label.text.replace(/\x00+$/g, '').trim(),
-        width: Math.max(0, label.right - label.left),
-        top: label.top,
-        left: label.left,
-      }))
-      .filter((label) => label.text.length > 0)
-      .sort((a, b) => b.width - a.width || a.top - b.top || a.left - b.left);
-
-    return candidates[0]?.text ?? null;
-  }
-
-  private extractFirstPressLabelText(commands: PaintCommand[]): string | null {
-    const dropdown = uiCoordinates.lightSwitches.dropdown;
-    const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
-    const ohjausButton = uiCoordinates.lightSwitches.ohjausButton;
-    const labels = extractTextLabels(commands);
-
-    const minLeft = Math.max(0, dropdown.x - 180);
-    const maxRight = arrowX - 12;
-    const minTop = Math.max(0, ohjausButton.y - 26);
-    const maxBottom = ohjausButton.y + 14;
-
-    const candidates = labels
-      .filter((label) => label.left >= minLeft && label.right <= maxRight)
-      .filter((label) => label.top >= minTop && label.bottom <= maxBottom)
-      .map((label) => ({
-        text: label.text.replace(/\x00+$/g, '').trim(),
-        width: Math.max(0, label.right - label.left),
-        top: label.top,
-        left: label.left,
-      }))
-      .filter((label) => label.text.length > 0)
-      .filter((label) => this.normalizeVisuText(label.text) !== 'ohjaus')
-      .sort((a, b) => b.width - a.width || a.top - b.top || a.left - b.left);
-
-    return candidates[0]?.text ?? null;
-  }
-
-  private doesDropdownHeaderMatchExpected(headerText: string | null, expectedText: string): boolean {
-    if (!headerText) return false;
-    const actual = this.normalizeVisuText(headerText);
-    const expected = this.normalizeVisuText(expectedText);
-    if (!actual || !expected) return false;
-    if (actual === expected) return true;
-    return actual.includes(expected) || expected.includes(actual);
-  }
-
-  private async verifyDropdownSelection(
-    lightId: string,
-    index: number,
-    seedCommands: PaintCommand[],
-  ): Promise<{
-    ok: boolean;
-    headerText: string | null;
-    firstPressText: string | null;
-    commands: PaintCommand[];
-    attempts: number;
-    elapsedMs: number;
-  }> {
-    const timeoutMs = Math.max(
-      ProtocolController.MIN_SELECTION_VERIFY_TIMEOUT_MS,
-      config.protocol?.selectionVerifyTimeoutMs ?? ProtocolController.DEFAULT_SELECTION_VERIFY_TIMEOUT_MS,
-    );
-    const pollIntervalMs = Math.max(
-      ProtocolController.MIN_SELECTION_VERIFY_POLL_INTERVAL_MS,
-      config.protocol?.selectionVerifyPollIntervalMs ?? ProtocolController.DEFAULT_SELECTION_VERIFY_POLL_INTERVAL_MS,
-    );
-    const expectedLabel = this.getExpectedLightLabel(lightId, index);
-    const expectedFirstPress = lightSwitchById[lightId]?.firstPress ?? null;
-    const startedAt = Date.now();
-    const commands: PaintCommand[] = [...seedCommands];
-    let attempts = 0;
-    let headerText = this.extractDropdownHeaderText(seedCommands);
-    let firstPressText = this.extractFirstPressLabelText(seedCommands);
-    const isMatch = () => {
-      if (this.doesDropdownHeaderMatchExpected(headerText, expectedLabel)) {
-        return true;
-      }
-      if (!expectedFirstPress) {
-        return false;
-      }
-      return this.doesDropdownHeaderMatchExpected(firstPressText, expectedFirstPress);
-    };
-
-    // If timeout is 0, skip polling — just check the seed.
-    if (timeoutMs <= 0) {
-      return {
-        ok: isMatch(),
-        headerText,
-        firstPressText,
-        commands,
-        attempts: 0,
-        elapsedMs: 0,
-      };
-    }
-
-    const deadline = startedAt + timeoutMs;
-    while (!isMatch() && Date.now() <= deadline) {
-      attempts++;
-      const forced = await this.forceRenderOnce(`dropdown-verify:${lightId}:${attempts}`);
-      commands.push(...forced);
-      const freshHeader = this.extractDropdownHeaderText(forced);
-      if (freshHeader) {
-        headerText = freshHeader;
-      }
-      const freshFirstPress = this.extractFirstPressLabelText(forced);
-      if (freshFirstPress) {
-        firstPressText = freshFirstPress;
-      }
-      if (isMatch()) {
-        break;
-      }
-
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        break;
-      }
-      await this.delay(Math.min(pollIntervalMs, remainingMs));
-    }
-
-    return {
-      ok: isMatch(),
-      headerText,
-      firstPressText,
-      commands,
-      attempts,
-      elapsedMs: Date.now() - startedAt,
     };
   }
 
@@ -1118,13 +792,11 @@ export class ProtocolController implements IWebVisuController {
     }
 
     const previousFirstVisible = this.dropdownFirstVisible;
-    const wasUnknown = this.dropdownStateUnknown;
     this.dropdownFirstVisible = snapshot.firstVisible;
-    this.dropdownStateUnknown = false;
     this.dropdownHandleCenterY = snapshot.handleCenterY;
     this.dropdownLastSnapshotLabels = snapshot.labels;
 
-    if (wasUnknown || previousFirstVisible !== snapshot.firstVisible) {
+    if (previousFirstVisible !== snapshot.firstVisible) {
       const handleTop = Math.round(snapshot.handleCenterY - 4);
       const handleBottom = handleTop + 9;
       logger.info({
@@ -1137,109 +809,6 @@ export class ProtocolController implements IWebVisuController {
       }, 'Detected dropdown scrollbar handle');
     }
     return true;
-  }
-
-  private async waitForDropdownOpen(lightId: string, clickSeedCommands?: PaintCommand[]): Promise<{
-    commands: PaintCommand[];
-    detected: boolean;
-    attempts: number;
-    elapsedMs: number;
-  }> {
-    const timeoutMs = Math.max(
-      ProtocolController.MIN_DROPDOWN_OPEN_TIMEOUT_MS,
-      config.protocol?.dropdownOpenTimeoutMs ?? ProtocolController.DEFAULT_DROPDOWN_OPEN_TIMEOUT_MS,
-    );
-    const pollIntervalMs = Math.max(
-      ProtocolController.MIN_DROPDOWN_OPEN_POLL_INTERVAL_MS,
-      config.protocol?.dropdownOpenPollIntervalMs ?? ProtocolController.DEFAULT_DROPDOWN_OPEN_POLL_INTERVAL_MS,
-    );
-
-    const startedAt = Date.now();
-    const deadline = startedAt + timeoutMs;
-    const collected: PaintCommand[] = [];
-    let attempt = 0;
-
-    // Include click response commands in collected data (for downstream use)
-    // but don't use them for dropdown detection — the mouseUp response may
-    // contain pre-dropdown labels that cause false matches.
-    if (clickSeedCommands && clickSeedCommands.length > 0) {
-      collected.push(...clickSeedCommands);
-    }
-
-    while (Date.now() <= deadline) {
-      attempt++;
-      const commands = await this.forceRenderOnce(`dropdown-open:${lightId}:${attempt}`);
-      collected.push(...commands);
-      if (this.detectKeypadDialog(commands)) {
-        const elapsedMs = Date.now() - startedAt;
-        logger.warn({ lightId, attempts: attempt, elapsedMs }, 'Keypad dialog detected while waiting for dropdown');
-        return { commands: collected, detected: false, attempts: attempt, elapsedMs };
-      }
-      const detected = this.syncDropdownStateFromCommands(commands, `dropdown-open:${lightId}:attempt:${attempt}`);
-      if (detected) {
-        const elapsedMs = Date.now() - startedAt;
-        logger.info({ lightId, attempts: attempt, elapsedMs }, 'Dropdown open render ready');
-        return { commands: collected, detected: true, attempts: attempt, elapsedMs };
-      }
-
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        break;
-      }
-      await this.delay(Math.min(pollIntervalMs, remainingMs));
-    }
-
-    const elapsedMs = Date.now() - startedAt;
-    logger.warn({
-      lightId,
-      attempts: attempt,
-      elapsedMs,
-      timeoutMs,
-    }, 'Dropdown open render not detected; continuing with cached dropdown state');
-
-    return { commands: collected, detected: false, attempts: attempt, elapsedMs };
-  }
-
-  private async collectStatusCommands(lightId: string, seedCommands: PaintCommand[]): Promise<PaintCommand[]> {
-    const allCommands = [...seedCommands];
-    const maxAttempts = Math.max(1, config.protocol?.statusMaxAttempts ?? 3);
-    const pollDelayMs = Math.max(0, config.protocol?.statusPollDelayMs ?? 0);
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const indicators = this.resolveIndicatorImages(allCommands);
-      const ready =
-        indicators.indicator1.length > 0 &&
-        indicators.indicator2.length > 0 &&
-        indicators.indicator3.length > 0;
-      if (ready) {
-        return allCommands;
-      }
-
-      const moreCommands = await this.forceRenderOnce(`status:${lightId}:${attempt}`);
-      allCommands.push(...moreCommands);
-
-      // If we got a full render (many commands) but still missing indicators,
-      // the PLC simply doesn't have all 3 for this switch — stop polling.
-      if (moreCommands.length >= 100) {
-        const postPollIndicators = this.resolveIndicatorImages(allCommands);
-        const postReady =
-          postPollIndicators.indicator1.length > 0 &&
-          postPollIndicators.indicator2.length > 0 &&
-          postPollIndicators.indicator3.length > 0;
-        if (postReady) {
-          return allCommands;
-        }
-        logger.debug({ lightId, attempt, commandCount: moreCommands.length },
-          'Full render received but not all indicators found; accepting partial status');
-        return allCommands;
-      }
-
-      if (attempt < maxAttempts && pollDelayMs > 0) {
-        await this.delay(pollDelayMs);
-      }
-    }
-
-    return allCommands;
   }
 
   private collectLampImages(commands: PaintCommand[]): ImageDrawCommand[] {
@@ -1352,25 +921,6 @@ export class ProtocolController implements IWebVisuController {
     return null;
   }
 
-  private detectKeypadDialog(commands: PaintCommand[]): boolean {
-    const labels = extractTextLabels(commands);
-    const texts = new Set(labels.map(l => l.text.replace(/\x00+$/g, '').trim()));
-    let digitCount = 0;
-    for (let d = 0; d <= 9; d++) {
-      if (texts.has(String(d))) digitCount++;
-    }
-    return digitCount >= 8 && texts.has('ESC');
-  }
-
-  private async dismissKeypadDialog(): Promise<void> {
-    const escButton = uiCoordinates.lightSwitches.keypadEscButton;
-    logger.warn({ x: escButton.x, y: escButton.y }, 'Keypad dialog detected — clicking ESC to dismiss');
-    await this.client.click(escButton.x, escButton.y);
-    await this.forceRenderOnce('keypad-dismiss-settle');
-    this.dropdownStateUnknown = true;
-    this.napitTabKnownActive = false;
-  }
-
   private async forceRenderOnce(reason: string): Promise<PaintCommand[]> {
     const request = buildViewportEvent(
       this.client.getClientId(),
@@ -1380,106 +930,67 @@ export class ProtocolController implements IWebVisuController {
       this.client.getSessionId()
     );
 
-    const { allCommands } = await this.client.sendEventAndCollect(request);
-    this.captureNapitHint(allCommands);
+    const { paintData, allCommands } = await this.client.sendEventAndCollect(request);
 
-    logger.debug({ reason, commandCount: allCommands.length }, 'Forced render');
+    if (allCommands.length === 0) {
+      this.consecutiveEmptyRenders++;
+      logger.info({
+        reason,
+        consecutiveEmptyRenders: this.consecutiveEmptyRenders,
+        commandCount: paintData.commandCount,
+        paintError: paintData.error,
+      }, 'Forced render returned zero commands');
+
+      const cooldownElapsed = (Date.now() - this.lastReconnectAt) >= ProtocolController.RECONNECT_COOLDOWN_MS;
+      if (this.consecutiveEmptyRenders >= ProtocolController.RECONNECT_EMPTY_THRESHOLD && cooldownElapsed) {
+        await this.doReconnect('consecutive-empty-renders');
+      }
+    } else {
+      this.consecutiveEmptyRenders = 0;
+      logger.debug({ reason, commandCount: allCommands.length }, 'Forced render');
+    }
+
     return allCommands;
   }
 
-  private async ensureNapitTabActive(forceClick: boolean, reason: string): Promise<void> {
-    if (!forceClick && this.napitTabKnownActive) {
-      return;
-    }
-    if (!forceClick && Date.now() < this.napitEnsureBackoffUntil) {
-      return;
-    }
-
+  private async navigateToNapitTab(): Promise<void> {
     const coords = uiCoordinates.tabs.napit;
-    const staticClickPoints = [
-      { x: coords.x, y: coords.y, source: 'static' },
-      { x: coords.x, y: coords.y + 10, source: 'static' },
-      { x: coords.x, y: coords.y + 20, source: 'static' },
-      { x: coords.x - 20, y: coords.y + 10, source: 'static' },
-      { x: coords.x + 20, y: coords.y + 10, source: 'static' },
-    ];
+    logger.info(`Clicking Napit tab at (${coords.x}, ${coords.y})`);
+    // The Napit tab renders on mouseDown (the PLC navigates and sends the full Napit panel
+    // paint data in the mouseDown response). mouseUp returns 0 commands.
+    // pressAndCollect captures both, so the 350-command mouseDown response is not discarded.
+    const clickCommands = await this.client.pressAndCollect(coords.x, coords.y);
+    const images = extractDrawImages(clickCommands);
+    const lampImages = images.filter(img => this.isLampStatusImageId(img.imageId));
+    const labels = extractTextLabels(clickCommands);
+    logger.info({
+      commandCount: clickCommands.length,
+      lampImageCount: lampImages.length,
+      labelCount: labels.length,
+    }, 'Napit tab navigation complete');
+  }
 
-    const clickPoints: Array<{ x: number; y: number; source: string }> = [];
-    const addClickPoint = (point: { x: number; y: number; source: string }) => {
-      if (clickPoints.some((candidate) => candidate.x === point.x && candidate.y === point.y)) {
-        return;
-      }
-      clickPoints.push(point);
-    };
-    if (this.napitTabClickHint) {
-      addClickPoint(this.napitTabClickHint);
-    }
-    for (const point of staticClickPoints) {
-      addClickPoint(point);
-    }
-
-    const maxAttempts = Math.max(8, clickPoints.length + 3);
-    let sawAnyData = false;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      let clickCommands: PaintCommand[] = [];
-      const shouldClick = forceClick || attempt > 1;
-      if (shouldClick) {
-        const point = clickPoints[Math.min(attempt - 1, clickPoints.length - 1)] ?? staticClickPoints[0];
-        logger.info({ reason, attempt, x: point.x, y: point.y, source: point.source }, 'Ensuring Napit tab is active');
-        const clickPaint = await this.client.click(point.x, point.y);
-        clickCommands = this.parseCommandsFromPaintResponse(clickPaint);
-      }
-
-      const commands: PaintCommand[] = [...clickCommands];
-      for (let probe = 1; probe <= 3; probe++) {
-        const forcedCommands = await this.forceRenderOnce(`napit-probe:${reason}:${attempt}:${probe}`);
-        commands.push(...forcedCommands);
-
-        const images = extractDrawImages(commands);
-        const lampImages = images.filter((img) => this.isLampStatusImageId(img.imageId));
-        const labels = extractTextLabels(commands);
-        if (commands.length > 0 || labels.length > 0 || images.length > 0) {
-          sawAnyData = true;
-        }
-        const napitContentLabels = labels.filter((label) => this.isNapitContentLabel(label.text));
-        const topLabels = labels
-          .filter((label) => label.top <= 55 && label.bottom <= 75)
-          .map((label) => ({ text: label.text, left: label.left, top: label.top, right: label.right, bottom: label.bottom }));
-
-        logger.info({
-          reason,
-          attempt,
-          probe,
-          imageCount: images.length,
-          imageIds: images.map((img) => img.imageId),
-          lampImageCount: lampImages.length,
-          lampImages: lampImages.map((img) => img.imageId),
-          napitContentLabelCount: napitContentLabels.length,
-          topLabels,
-          napitHint: this.napitTabClickHint,
-        }, 'Napit tab probe');
-
-        if (lampImages.length > 0 || napitContentLabels.length > 0) {
-          this.napitTabKnownActive = true;
-          this.napitTabVerifiedAt = Date.now();
-          this.napitEnsureBackoffUntil = 0;
-          return;
-        }
-
-      }
+  private async doReconnect(reason: string): Promise<void> {
+    logger.warn({ reason }, 'Reconnecting to PLC...');
+    try {
+      await this.client.disconnect();
+    } catch (error) {
+      logger.warn({ error }, 'Error during disconnect before reconnect');
     }
 
-    if (!sawAnyData && this.napitTabKnownActive) {
-      logger.warn({ reason }, 'Napit probes returned only empty frames; keeping previously verified active state');
-      this.napitEnsureBackoffUntil = Date.now() + 2000;
-      return;
-    }
+    // Reset controller state
+    this.dropdownFirstVisible = 0;
+    this.dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
+    this.dropdownLastSnapshotLabels = [];
+    this.lastStatusByIndicator.clear();
+    this.consecutiveEmptyRenders = 0;
+    this.lastReconnectAt = Date.now();
 
-    logger.warn({ reason }, 'Failed to verify Napit tab by lamp/images labels; continuing with best effort');
-    this.napitTabKnownActive = false;
-    this.napitTabVerifiedAt = 0;
-    this.napitEnsureBackoffUntil = Date.now() + 2000;
+    await this.client.connect();
+    await this.waitForInitialRenderReady();
+    await this.navigateToNapitTab();
+
+    logger.info({ reason }, 'Reconnected successfully');
   }
 
   private delay(ms: number): Promise<void> {
