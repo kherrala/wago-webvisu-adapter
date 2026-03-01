@@ -1,6 +1,6 @@
 # WAGO WebVisu Adapter
 
-HTTP REST API adapter for WAGO PLC WebVisu home automation interfaces. This adapter uses headless browser automation to control canvas-based WebVisu interfaces and exposes functionality through a standard HTTP API and MCP server for Claude Desktop integration.
+HTTP REST API and MCP server for controlling WAGO PLC home automation light switches. The adapter speaks the CoDeSys binary protocol directly over HTTP — no browser required.
 
 ## Architecture
 
@@ -15,22 +15,30 @@ HTTP REST API adapter for WAGO PLC WebVisu home automation interfaces. This adap
 │  │   HTTP REST API (Express)        │◄───│   MCP SSE Server             │  │
 │  │   Port 8080                      │    │   Port 3002                  │  │
 │  │                                  │    │                              │  │
-│  │   Playwright + Chromium          │    │   Tools:                     │  │
-│  │   Browser automation             │    │   - list_lights              │  │
+│  │   Protocol controller (default)  │    │   Tools:                     │  │
+│  │   CoDeSys binary over HTTP       │    │   - list_lights              │  │
 │  │                                  │    │   - get_light_status         │  │
-│  └──────────────────────────────────┘    │   - toggle_light             │  │
-│                 │                        └──────────────────────────────┘  │
-│                 ▼                                      ▲                    │
-│  ┌──────────────────────────────────┐                  │                    │
-│  │       WAGO WebVisu (PLC)         │           Claude Desktop              │
-│  │       Canvas-based UI            │                                       │
+│  │   SQLite cache + polling service │    │   - toggle_light             │  │
+│  └──────────────────────────────────┘    └──────────────────────────────┘  │
+│                 │                                      ▲                    │
+│                 ▼                                      │                    │
+│  ┌──────────────────────────────────┐           Claude Desktop              │
+│  │       WAGO PLC (WebVisuV3)       │                                       │
+│  │       CoDeSys runtime            │                                       │
 │  └──────────────────────────────────┘                                       │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The solution consists of two containers:
-- **wago-webvisu-adapter**: Node.js application with Playwright/Chromium for browser automation
+Two containers:
+- **wago-webvisu-adapter**: Node.js app with Express API, protocol controller, SQLite status cache, and background polling service
 - **mcp-server**: Lightweight Python MCP server that proxies requests to the HTTP API
+
+### Controller modes
+
+| Mode | Default | Description |
+|------|---------|-------------|
+| `protocol` | ✓ | Speaks CoDeSys binary protocol directly. Lightweight, no browser. |
+| `playwright` | | Automates a headless Chromium browser. Useful for calibration. |
 
 ## Prerequisites
 
@@ -41,21 +49,17 @@ For local development:
 - Node.js 18+
 - Python 3.12+
 
-## Quick Start with Docker
+## Quick Start
 
-1. Build and start:
 ```bash
-docker-compose up -d
-```
+# Build and start
+docker compose up -d
 
-2. Check status:
-```bash
-docker-compose ps
-docker-compose logs -f
-```
+# Check status
+docker compose ps
+docker compose logs -f
 
-4. Test the API:
-```bash
+# Test the API
 curl http://localhost:8080/health
 curl http://localhost:8080/api/lights
 ```
@@ -66,27 +70,29 @@ curl http://localhost:8080/api/lights
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `CONTROLLER` | `protocol` | Controller backend: `protocol` or `playwright` |
 | `PORT` | `8080` | HTTP API server port |
 | `MCP_PORT` | `3002` | MCP SSE server port |
-| `HEADLESS` | `true` | Run browser in headless mode |
-| `PROTOCOL_PORT` | `443` | PLC HTTPS port for protocol and debug image fetching |
-| `PROTOCOL_DEBUG_HTTP` | `false` | Enable verbose protocol HTTP frame logs in app output |
-| `PROTOCOL_SESSION_TRACE` | `true` | Write per-session sent/received protocol frames to log files |
-| `PROTOCOL_SESSION_TRACE_DIR` | `./data/protocol-trace` | Directory for timestamped protocol session trace files |
-| `PROTOCOL_LOG_RAW_FRAME_DATA` | `false` | Include raw frame bytes (`bytesHex`) in protocol logs and trace files |
-| `PROTOCOL_DEBUG_RENDER` | `false` | Render incoming protocol paint commands into PNG debug frames |
-| `PROTOCOL_DEBUG_RENDER_DIR` | `./data/protocol-render-debug` | Base directory for rendered frame sessions |
-| `PROTOCOL_DEBUG_RENDER_MAX_FRAMES` | `400` | Maximum number of rendered frames per session |
-| `PROTOCOL_DEBUG_RENDER_MIN_INTERVAL_MS` | `0` | Minimum interval between rendered frames (0 = capture all) |
-| `PROTOCOL_DEBUG_RENDER_INCLUDE_EMPTY` | `true` | Persist empty paint responses too (useful for timing analysis gaps) |
-| `PROTOCOL_DEBUG_RENDER_FETCH_IMAGES` | `true` | Try to fetch actual image assets from PLC (`/ImageByImagePoolId` + image pool CSV) |
-| `PROTOCOL_DEBUG_RENDER_IMAGE_FETCH_TIMEOUT_MS` | `1200` | Timeout per remote image fetch request |
+| `DB_PATH` | `./data/lights.db` | SQLite database path |
+| `POLLING_ENABLED` | `true` | Enable background light status polling |
+| `POLL_CYCLE_DELAY_MS` | `30000` | Delay between full polling cycles (ms) |
+| `PROTOCOL_HOST` | `192.168.1.10` | PLC hostname |
+| `PROTOCOL_PORT` | `443` | PLC HTTPS port |
+| `PROTOCOL_TIMEOUT` | `5000` | Per-request timeout (ms) |
+| `HEADLESS` | `true` | Headless browser (Playwright mode only) |
+| `PROTOCOL_DEBUG_HTTP` | `false` | Verbose protocol HTTP frame logs |
+| `PROTOCOL_SESSION_TRACE` | `true` | Write per-session protocol frames to trace files |
+| `PROTOCOL_SESSION_TRACE_DIR` | `/data/protocol-trace` | Directory for session trace files |
+| `PROTOCOL_LOG_RAW_FRAME_DATA` | `false` | Include raw frame bytes in logs |
+| `PROTOCOL_DEBUG_RENDER` | `false` | Render paint commands into PNG debug frames |
+| `PROTOCOL_DEBUG_RENDER_DIR` | `/data/protocol-render-debug` | Base directory for rendered frame sessions |
+| `PROTOCOL_DEBUG_RENDER_MAX_FRAMES` | `400` | Maximum rendered frames per session |
+| `PROTOCOL_DEBUG_RENDER_MIN_INTERVAL_MS` | `0` | Minimum interval between frames (0 = capture all) |
+| `PROTOCOL_DEBUG_RENDER_INCLUDE_EMPTY` | `true` | Persist empty paint responses (useful for timing gaps) |
+| `PROTOCOL_DEBUG_RENDER_FETCH_IMAGES` | `true` | Fetch image assets from PLC image pool |
+| `PROTOCOL_DEBUG_RENDER_IMAGE_FETCH_TIMEOUT_MS` | `1200` | Timeout per image fetch (ms) |
 
-The WebVisu URL is configured in `src/config.ts`:
-
-```typescript
-url: 'https://192.168.1.10/webvisu/webvisu.htm'
-```
+The PLC address is set in `src/config.ts` and environment variables above.
 
 ## API Endpoints
 
@@ -94,110 +100,111 @@ url: 'https://192.168.1.10/webvisu/webvisu.htm'
 ```bash
 curl http://localhost:8080/health
 ```
+```json
+{"status": "healthy", "webvisuConnected": true}
+```
 
-### List Available Lights
+### List Physical Lights
 ```bash
 curl http://localhost:8080/api/lights
 ```
-
-Response:
 ```json
 {
-  "count": 48,
+  "count": 47,
   "lights": [
     {
-      "id": "kylpyhuone-1",
-      "name": "Kylpyhuone 1",
-      "firstPress": "Kylpyhuone alakerta",
-      "secondPress": null,
+      "id": "kylpyhuone",
+      "name": "Kylpyhuone",
       "hasDualFunction": false,
-      "href": "/api/lights/kylpyhuone-1"
+      "controllers": [
+        {"switchId": "kylpyhuone-1", "switchName": "Kylpyhuone 1", "functionNumber": 1}
+      ],
+      "isOn": true,
+      "isOn2": null,
+      "polledAt": "2025-01-15T10:23:00.000Z",
+      "href": "/api/lights/kylpyhuone"
     },
     {
-      "id": "kylpyhuone-2",
-      "name": "Kylpyhuone 2",
-      "firstPress": "Sauna laude LED",
-      "secondPress": "Sauna siivousvalo",
+      "id": "sauna-laude-ledi",
+      "name": "Saunan laude ledi",
       "hasDualFunction": true,
-      "href": "/api/lights/kylpyhuone-2"
+      "controllers": [
+        {"switchId": "kylpyhuone-2", "switchName": "Kylpyhuone 2", "functionNumber": 1},
+      ],
+      "isOn": false,
+      "isOn2": null,
+      "polledAt": "2025-01-15T10:23:05.000Z",
+      "href": "/api/lights/sauna-laude-ledi"
     }
   ]
 }
 ```
 
-### Get Light Status
-```bash
-curl http://localhost:8080/api/lights/kylpyhuone-2
-```
+`isOn` and `isOn2` are `null` until the background poller has queried the light at least once. `hasDualFunction` means the light is also reachable via a second-press function on at least one of its switches.
 
-Response for a dual-function switch:
+### Get Light Status (live)
+```bash
+curl http://localhost:8080/api/lights/kylpyhuone
+```
 ```json
 {
-  "id": "kylpyhuone-2",
-  "name": "Kylpyhuone 2",
+  "id": "kylpyhuone",
+  "name": "Kylpyhuone",
   "isOn": true,
-  "isOn2": false,
-  "firstPress": "Sauna laude LED",
-  "secondPress": "Sauna siivousvalo",
-  "hasDualFunction": true,
+  "hasDualFunction": false,
+  "controllers": [
+    {"switchId": "kylpyhuone-1", "switchName": "Kylpyhuone 1", "functionNumber": 1}
+  ],
   "_links": {
-    "self": "/api/lights/kylpyhuone-2",
-    "toggle": "/api/lights/kylpyhuone-2/toggle",
-    "toggleSecond": "/api/lights/kylpyhuone-2/toggle?function=2"
+    "self": "/api/lights/kylpyhuone",
+    "toggle": "/api/lights/kylpyhuone/toggle"
   }
 }
 ```
 
 ### Toggle Light
 ```bash
-# Toggle first function (default)
-curl -X POST http://localhost:8080/api/lights/kylpyhuone-1/toggle
-
-# Toggle second function (for dual-function switches)
-curl -X POST http://localhost:8080/api/lights/kylpyhuone-2/toggle?function=2
+curl -X POST http://localhost:8080/api/lights/kylpyhuone/toggle
 ```
+The adapter uses the light's primary controller (configured in `src/config.ts`) to determine which switch and function to activate.
 
-### Debug: Take Screenshot
+### Polling Status
 ```bash
-curl http://localhost:8080/api/debug/screenshot > screenshot.png
+curl http://localhost:8080/api/polling/status
 ```
 
-### Debug: View Rendered UI Image
+### Debug: Rendered UI Image
 ```bash
 curl http://localhost:8080/api/debug/rendered-ui > rendered-ui.png
 ```
+Returns the latest cumulative rendered frame cached in memory (requires `PROTOCOL_DEBUG_RENDER=true`). Does not trigger a new render.
 
-`/api/debug/rendered-ui` returns the latest cumulative rendered frame already cached in server memory. It does not trigger a new render request.
-
-In protocol mode, `takeScreenshot` uses the command renderer when `PROTOCOL_DEBUG_RENDER=true`.
-Rendered debug frames are saved automatically into timestamped session folders:
-
-```text
+Debug frames are saved automatically into timestamped session folders:
+```
 ./data/protocol-render-debug/session-YYYYMMDD-HHMMSS-MMM/
+  frame-....png   — rendered approximation of the UI
+  frame-....json  — timing + request/response metadata
+  timeline.ndjson — append-only timeline for sequence analysis
 ```
 
-Each captured frame writes:
-- `frame-....png`: rendered approximation of the UI from received paint commands
-- `frame-....json`: timing + request/response metadata for that frame
-- `timeline.ndjson`: append-only timeline for quick sequence analysis
+The renderer fetches real image assets from the PLC image pool (`/ImageByImagePoolId` + `application.imagepoolcollection.csv`) so DrawImage commands are painted accurately.
 
-Protocol debug rendering keeps a cumulative canvas and tries to fetch real image assets from the PLC image pool (`/ImageByImagePoolId` and `application.imagepoolcollection.csv`) so DrawImage commands can be painted closer to browser output.
-
-Reverse-engineered command mapping and draw behavior notes are documented in `reverse-engineering/DRAW_COMMANDS.md`.
+### Debug: Navigate to Tab
+```bash
+curl -X POST http://localhost:8080/api/debug/navigate/napit
+```
+Valid tabs: `autokatos`, `ulkopistorasia`, `lisatoiminnot`, `napit`, `lammitys`, `hvac`.
 
 ## Claude Desktop Integration (MCP)
-
-The adapter includes an MCP (Model Context Protocol) server for integration with Claude Desktop.
 
 ### Setup
 
 1. Start the containers:
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
-2. Add to Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
-
+2. Add to Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 ```json
 {
   "mcpServers": {
@@ -208,56 +215,46 @@ docker-compose up -d
 }
 ```
 
-3. Restart Claude Desktop
+3. Restart Claude Desktop.
 
 ### Available MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `list_lights` | List all available light switches with their functions (firstPress/secondPress) |
-| `get_light_status` | Get status of a specific light (includes isOn2 for dual-function switches) |
-| `toggle_light` | Toggle a light on/off. Supports `function` parameter (1 or 2) for dual-function switches |
+| `list_lights` | List all physical lights with cached on/off status and controlling switches |
+| `get_light_status` | Get live status of a specific light by ID |
+| `toggle_light` | Toggle a light on or off by ID |
 
-### Dual-Function Switches
-
-Some physical switches control two different lights:
-- **First press** toggles the primary light (firstPress)
-- **Second press** toggles the secondary light (secondPress)
-
-The MCP tools expose this via the optional `function` parameter on `toggle_light`.
-
-### Example Claude Prompts
+### Example Prompts
 
 - "List all the lights in my home"
 - "Turn on the kitchen light"
 - "What's the status of the bathroom lights?"
 - "Toggle the hallway light"
-- "Turn on the sauna cleaning light" (uses function=2 on kylpyhuone-2)
-- "Which switches have dual functions?"
+- "Which lights are currently on?"
 
 ## Local Development
 
 ### Installation
 
 ```bash
-# Install dependencies
 npm install
-
-# Install Playwright browser
-npx playwright install chromium
-
-# Build
 npm run build
+```
+
+For Playwright mode only:
+```bash
+npx playwright install chromium
 ```
 
 ### Running Locally
 
 ```bash
-# Development mode
+# Protocol mode (default)
 npm run dev
 
-# With visible browser (for debugging)
-HEADLESS=false npm run dev
+# Playwright mode with visible browser
+CONTROLLER=playwright HEADLESS=false npm run dev
 
 # Production
 npm start
@@ -271,134 +268,93 @@ pip install -r requirements.txt
 API_BASE_URL=http://localhost:8080 python server.py
 ```
 
-## Calibration
-
-The UI coordinates in `src/config.ts` may need adjustment for your specific WebVisu setup.
-
-### Interactive Calibration Tool
-
-```bash
-npx ts-node src/calibrate.ts
-```
-
-This opens a visible browser window. Click on UI elements to see their coordinates logged to the console.
-
-### Connection Test Tool
-
-```bash
-npm run test:connection
-```
-
-Takes screenshots at each step and saves them to `calibration-screenshots/` for verification.
-
-### Updating Coordinates
-
-Edit `src/config.ts` to update the coordinate mappings:
-
-```typescript
-export const uiCoordinates = {
-  tabs: {
-    napit: { x: 490, y: 11 },
-    // ...
-  },
-  lightSwitches: {
-    dropdown: { x: 280, y: 130 },
-    dropdownArrow: { x: 523, y: 139 },
-    ohjausButton: { x: 280, y: 159 },      // First function button
-    ohjausButton2: { x: 290, y: 240 },     // Second function button
-    statusIndicator: { x: 505, y: 204 },   // First status indicator
-    statusIndicator2: { x: 505, y: 274 },  // Second status indicator
-    // ...
-  },
-};
-```
-
 ## Project Structure
 
 ```
 wago-webvisu-adapter/
 ├── src/
-│   ├── config.ts              # Configuration and UI coordinates
-│   ├── webvisu-controller.ts  # Playwright browser automation
-│   ├── api.ts                 # Express HTTP API
-│   ├── index.ts               # Main entry point
-│   ├── test-connection.ts     # Connection test utility
-│   └── calibrate.ts           # Interactive calibration tool
+│   ├── config.ts                # Light catalog, switch catalog, UI coordinates
+│   ├── controller-interface.ts  # Shared IWebVisuController interface
+│   ├── protocol-controller.ts   # CoDeSys binary protocol controller (default)
+│   ├── webvisu-controller.ts    # Playwright browser controller (fallback)
+│   ├── api.ts                   # Express HTTP API
+│   ├── polling-service.ts       # Background light status poller
+│   ├── database.ts              # SQLite status cache
+│   ├── index.ts                 # Main entry point
+│   └── protocol/
+│       ├── binary.ts            # MBUI/TLV/Frame binary primitives
+│       ├── messages.ts          # Request builders + response parsers
+│       ├── paint-commands.ts    # Paint command parser, status color extraction
+│       └── client.ts            # Stateful protocol HTTP client
 ├── mcp-server/
-│   ├── server.py              # Python MCP server
-│   ├── requirements.txt       # Python dependencies
-│   └── Dockerfile             # MCP server container
-├── Dockerfile                 # Main adapter container
-├── docker-compose.yml         # Container orchestration
+│   ├── server.py                # Python MCP server
+│   ├── requirements.txt
+│   └── Dockerfile
+├── data/                        # SQLite DB + protocol traces (bind-mounted)
+├── Dockerfile
+├── docker-compose.yml
 ├── package.json
 ├── tsconfig.json
 └── README.md
 ```
 
+### Light and Switch Model
+
+Lights are the canonical resource: each has a unique `id` and `name`. One or more physical switches (or first/second-press functions on a switch) may control the same light.
+
+- **`lightList`** — physical light catalog (47 lights)
+- **`lightSwitchList`** — PLC dropdown switches (57 entries, 0-indexed), each with optional `firstPressLightId` and `secondPressLightId`
+- **`lightPrimaryController`** — maps each light ID to its preferred `{switchId, functionNumber}` for status queries and toggles (first-press preferred over second-press)
+- **`lightAllControllers`** — all controller pairs per light
+
+Status is cached by light ID so a query via one switch populates the cache for all other switches controlling the same light.
+
 ## Troubleshooting
 
-### Timeout on Startup
+### Adapter not connecting to PLC
 
-If the adapter times out during initialization:
+```bash
+# Test network access
+curl -k https://192.168.1.10/WebVisuV3.bin
 
-1. **Test network connectivity:**
-   ```bash
-   curl -k https://192.168.1.10/webvisu/webvisu.htm
-   ```
+# Check adapter logs
+docker compose logs -f wago-webvisu-adapter
+```
 
-2. **Run with visible browser:**
-   ```bash
-   HEADLESS=false npm run dev
-   ```
+### MCP server connection issues
 
-3. **Check the debug screenshot** saved as `debug-no-canvas.png` if canvas is not found.
+```bash
+# Check both containers
+docker compose ps
 
-### MCP Server Connection Issues
+# Check MCP health
+curl http://localhost:3002/health
 
-1. **Check both containers are running:**
-   ```bash
-   docker-compose ps
-   ```
+# Check logs
+docker compose logs mcp-server
+```
 
-2. **Check MCP server health:**
-   ```bash
-   curl http://localhost:3002/health
-   ```
+### Diagnosing protocol issues
 
-3. **Check logs:**
-   ```bash
-   docker-compose logs mcp-server
-   ```
+Enable debug render to capture paint commands as PNG frames:
 
-### Operations Not Working
+```bash
+PROTOCOL_DEBUG_RENDER=true docker compose up -d
+curl http://localhost:8080/api/debug/rendered-ui > rendered-ui.png
+```
 
-Canvas-based UIs require precise coordinates. If clicks don't work:
-
-1. Run the calibration tool to verify coordinates
-2. Compare calibration screenshots with expected behavior
-3. Adjust coordinates in `src/config.ts`
+Session traces (raw frames) are written to `./data/protocol-trace/` by default.
 
 ## Docker Commands
 
 ```bash
-# Build images
-docker-compose build
-
-# Start containers
-docker-compose up -d
-
-# Stop containers
-docker-compose down
-
-# View logs
-docker-compose logs -f
-
-# View specific container logs
-docker-compose logs -f wago-webvisu-adapter
-docker-compose logs -f mcp-server
-
-# Rebuild and restart
-docker-compose up -d --build
+docker compose build          # Build images
+docker compose up -d          # Start containers
+docker compose up -d --build  # Rebuild and start
+docker compose down           # Stop containers
+docker compose logs -f        # View all logs
+docker compose logs -f wago-webvisu-adapter
+docker compose logs -f mcp-server
 ```
 
 ## License
