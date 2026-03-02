@@ -300,17 +300,61 @@ export class ProtocolController implements IWebVisuController {
 
       await this.client.mouseDown(scrollbarX, currentHandleY);
       await this.delay(dragStartHoldMs);
-      const step = delta > 0 ? 4 : -4;
+      const step = delta > 0 ? 2 : -2;
       for (let y = currentHandleY + step; delta > 0 ? y < targetHandleY : y > targetHandleY; y += step) {
         await this.client.mouseMove(scrollbarX, y);
         await this.delay(dragStepDelayMs);
       }
-      // Final move exactly at targetHandleY. The loop stops one step short, and the PLC
-      // tends to settle at the second-to-last move position rather than the mouseUp
-      // position. Sending an explicit move to the target ensures we land there.
-      await this.client.mouseMove(scrollbarX, targetHandleY);
+      // Final move at targetHandleY, then verify the PLC has settled to the
+      // correct position by reading paint data. If it undershot, nudge further.
+      const finalMoveCmds = await this.client.mouseMoveAndCollect(scrollbarX, targetHandleY);
+      stepCommands.push(...finalMoveCmds);
       await this.delay(dragEndHoldMs);
-      const dragUpCmds = await this.client.mouseUpAndCollect(scrollbarX, targetHandleY);
+
+      // Poll to verify the scroll position from paint data while mouse is still held.
+      // The dropdown is open during drag — items redraw as the thumb moves, so
+      // resolveDropdownSnapshot can read the actual firstVisible.
+      const dragVerifyTimeoutMs = 3000;
+      const dragVerifyDeadline = Date.now() + dragVerifyTimeoutMs;
+      let verifyPolls = 0;
+      let dragY = targetHandleY;
+      while (Date.now() < dragVerifyDeadline) {
+        verifyPolls++;
+        const settleCmds = await this.forceRenderOnce(`drag-verify:${verifyPolls}:${lightId}`);
+        stepCommands.push(...settleCmds);
+        const snapshot = this.resolveDropdownSnapshot(settleCmds);
+        if (snapshot) {
+          const actualFirst = snapshot.firstVisible;
+          logger.info({
+            verifyPolls,
+            actualFirst,
+            targetFirstVisible,
+            delta: targetFirstVisible - actualFirst,
+          }, 'Drag position verified from paint data');
+
+          if (actualFirst === targetFirstVisible) {
+            // Perfect — handle is at the right position.
+            break;
+          }
+          // Undershot or overshot — nudge the mouse to compensate.
+          const correction = this.getDropdownScrollY(targetFirstVisible) - this.getDropdownScrollY(actualFirst);
+          dragY = Math.round(dragY + correction);
+          // Clamp to thumb range.
+          dragY = Math.max(scrollbarConfig.thumbRange.topY, Math.min(dragY, scrollbarConfig.thumbRange.bottomY));
+          logger.info({ actualFirst, targetFirstVisible, correctionPx: Math.round(correction), newDragY: dragY }, 'Nudging drag to correct position');
+          const nudgeCmds = await this.client.mouseMoveAndCollect(scrollbarX, dragY);
+          stepCommands.push(...nudgeCmds);
+          await this.delay(dragEndHoldMs);
+          continue;
+        }
+        // No parseable labels yet — wait and retry.
+        const remaining = dragVerifyDeadline - Date.now();
+        if (remaining > 0) {
+          await this.delay(Math.min(150, remaining));
+        }
+      }
+
+      const dragUpCmds = await this.client.mouseUpAndCollect(scrollbarX, dragY);
       stepCommands.push(...dragUpCmds);
 
       // Dropdown CLOSED after drag mouseUp. Reopen to proceed with item click.
@@ -323,22 +367,24 @@ export class ProtocolController implements IWebVisuController {
         this.dropdownFirstVisible = targetFirstVisible;
       }
 
-      // After drag, check if target is visible. If not, the drag undershot —
-      // use arrow button clicks to correct the remaining few positions.
+      // After drag, check if target is visible. If not, use arrow clicks to
+      // correct — supports both undershot (scroll down) and overshot (scroll up).
       if (!this.isDropdownIndexVisible(index)) {
-        const remaining = targetFirstVisible - this.dropdownFirstVisible;
-        const arrowCorrectMax = 10;
-        if (remaining > 0 && remaining <= arrowCorrectMax) {
-          logger.info({ lightId, remaining, firstVisible: this.dropdownFirstVisible, targetFirstVisible }, 'Drag undershot — correcting with arrow clicks');
+        const drift = targetFirstVisible - this.dropdownFirstVisible;
+        const absDrift = Math.abs(drift);
+        const arrowCorrectMax = 15;
+        if (absDrift > 0 && absDrift <= arrowCorrectMax) {
           const scrollArrowX = scrollbarConfig.x;
-          const downArrowY = scrollbarConfig.scanRange.bottomY;
-          for (let click = 0; click < remaining; click++) {
-            await this.client.mouseDown(scrollArrowX, downArrowY);
-            const upCmds = await this.client.mouseUpAndCollect(scrollArrowX, downArrowY);
+          const arrowY = drift > 0
+            ? scrollbarConfig.scanRange.bottomY   // down arrow
+            : scrollbarConfig.scanRange.topY;      // up arrow
+          logger.info({ lightId, drift, firstVisible: this.dropdownFirstVisible, targetFirstVisible, direction: drift > 0 ? 'down' : 'up' }, 'Post-drag drift — correcting with arrow clicks');
+          for (let click = 0; click < absDrift; click++) {
+            await this.client.mouseDown(scrollArrowX, arrowY);
+            const upCmds = await this.client.mouseUpAndCollect(scrollArrowX, arrowY);
             stepCommands.push(...upCmds);
           }
           this.dropdownFirstVisible = targetFirstVisible;
-          // Arrow clicks keep dropdown open but don't close it. No reopen needed.
         }
       }
 
