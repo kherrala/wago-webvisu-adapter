@@ -372,6 +372,19 @@ export class WebVisuProtocolClient {
     return this.handlePaintResponse(resp);
   }
 
+  /**
+   * Send a heartbeat and collect all paint commands including continuations.
+   * Lightweight alternative to sending a viewport event — retrieves pending
+   * paint data without triggering a full PLC redraw.
+   */
+  async heartbeatAndCollect(): Promise<PaintCommand[]> {
+    this.ensureConnected();
+    const { allCommands } = await this.sendEventAndCollect(
+      buildHeartbeat(this.clientId, this.sessionId)
+    );
+    return allCommands;
+  }
+
   async click(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
 

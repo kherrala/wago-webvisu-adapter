@@ -100,8 +100,8 @@ export const uiCoordinates = {
     statusIndicator2: { x: 505, y: 235 },
     statusIndicator3: { x: 75, y: 291 },
     dropdownList: {
-      firstItemY: 168,
-      itemHeight: 29,
+      firstItemY: 153,
+      itemHeight: 30,
       visibleItems: 5,
       itemX: 290,
     },

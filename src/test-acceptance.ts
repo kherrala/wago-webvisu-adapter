@@ -273,6 +273,30 @@ async function T11_sequential_polling(): Promise<void> {
   }
 }
 
+/**
+ * T12-cold-start-far-index
+ * Reconnect to get a fresh session (dropdown at scroll position 0), then
+ * immediately select saareke-4 (index 44) — a large drag from the top.
+ *
+ * This reproduces the exact production failure scenario: after a deploy the
+ * polling service resumes from a high index on a fresh PLC session, requiring
+ * a 0→44 drag as the very first dropdown operation. Tests that:
+ * - Dropdown open verification works on a fresh session
+ * - Large drag + nudge loop works from position 0
+ * - Header text is found and verified (not silently skipped)
+ */
+async function T12_cold_start_far_index(): Promise<void> {
+  // Force a reconnect to simulate a cold start (fresh session, dropdown at 0).
+  await controller.close();
+  await controller.initialize();
+  const connected = await controller.isConnected();
+  if (!connected) throw new Error('isConnected() returned false after reconnect');
+
+  const status = await controller.getLightStatus('saareke-4');
+  assertStatus('saareke-4', status);
+  console.log(`    saareke-4 (index 44, cold start): isOn=${status.isOn}`);
+}
+
 // ── Test registry ─────────────────────────────────────────────────────────────
 const ALL_TESTS: Array<[string, () => Promise<void>]> = [
   ['T01-connect',                    T01_connect],
@@ -286,6 +310,7 @@ const ALL_TESTS: Array<[string, () => Promise<void>]> = [
   ['T09-drag-far-end',               T09_drag_far_end],
   ['T10-select-last-item',           T10_select_last_item],
   ['T11-sequential-polling',         T11_sequential_polling],
+  ['T12-cold-start-far-index',       T12_cold_start_far_index],
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────────────
