@@ -447,6 +447,21 @@ export class WebVisuProtocolClient {
   }
 
   /**
+   * Send a mouseDown at (x, y) and collect all paint commands including continuations.
+   * Used when mouseDown triggers a UI change (e.g. dropdown item selection closes the list).
+   */
+  async mouseDownAndCollect(x: number, y: number): Promise<PaintCommand[]> {
+    this.ensureConnected();
+    if (x !== this.lastMouseX || y !== this.lastMouseY) {
+      await this.mouseMove(x, y);
+    }
+    const { allCommands } = await this.sendEventAndCollect(
+      buildMouseDown(this.clientId, x, y, this.sessionId)
+    );
+    return allCommands;
+  }
+
+  /**
    * Send a mouseUp at (x, y) and collect all paint commands including continuations.
    * Used by doDrag to capture the scroll result from the final mouseUp.
    */
@@ -1249,7 +1264,20 @@ export class WebVisuProtocolClient {
     return Date.now() - start;
   }
 
-  private sendRaw(data: ArrayBuffer, options?: { useHeaderPayload?: boolean; allowEmptyResponse?: boolean }): Promise<ArrayBuffer> {
+  private async sendRaw(data: ArrayBuffer, options?: { useHeaderPayload?: boolean; allowEmptyResponse?: boolean }): Promise<ArrayBuffer> {
+    try {
+      return await this.sendRawOnce(data, options);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : '';
+      if (msg.includes('socket hang up') || msg.includes('ECONNRESET')) {
+        logger.warn({ error: msg }, 'Connection dropped, retrying request once');
+        return this.sendRawOnce(data, options);
+      }
+      throw error;
+    }
+  }
+
+  private sendRawOnce(data: ArrayBuffer, options?: { useHeaderPayload?: boolean; allowEmptyResponse?: boolean }): Promise<ArrayBuffer> {
     return new Promise<ArrayBuffer>((resolve, reject) => {
       const startedAtMs = Date.now();
       const body = Buffer.from(data);

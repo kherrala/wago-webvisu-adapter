@@ -47,7 +47,6 @@ export class ProtocolController implements IWebVisuController {
   // Dropdown scroll tracking.
   private dropdownFirstVisible = 0;
   private dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
-  private dropdownLastSnapshotLabels: Array<{ text: string; index: number; top: number; bottom: number; row: number }> = [];
 
   // Cache status by physical light name (normalised firstPress/secondPress text).
   // Keyed this way so that multiple switches controlling the same light share one entry.
@@ -145,7 +144,7 @@ export class ProtocolController implements IWebVisuController {
     this.initialized = false;
     this.dropdownFirstVisible = 0;
     this.dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
-    this.dropdownLastSnapshotLabels = [];
+
     this.lastStatusByLight.clear();
     this.consecutiveEmptyRenders = 0;
     logger.info('Protocol controller closed');
@@ -154,7 +153,7 @@ export class ProtocolController implements IWebVisuController {
   resetDropdownState(): void {
     this.dropdownFirstVisible = 0;
     this.dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
-    this.dropdownLastSnapshotLabels = [];
+
     logger.info('Dropdown state reset to top');
   }
 
@@ -225,6 +224,10 @@ export class ProtocolController implements IWebVisuController {
     const dropdownOpenTimeoutMs = config.protocol?.dropdownOpenTimeoutMs ?? 6000;
     const maxOpenAttempts = 3;
     let dropdownOpened = false;
+    // Track the most recent command batch that confirmed the dropdown is open.
+    // Used for scroll sync and click positioning — must be from a single render
+    // to avoid mixing stale labels from different states.
+    let openConfirmCmds: PaintCommand[] = [];
 
     for (let openAttempt = 1; openAttempt <= maxOpenAttempts; openAttempt++) {
       const clickCommands = await this.client.pressAndCollect(arrowX, arrowY);
@@ -235,8 +238,9 @@ export class ProtocolController implements IWebVisuController {
         labelCount: extractTextLabels(clickCommands).length,
       }, 'Dropdown open: pressAndCollect response');
 
-      if (this.isDropdownOpen(allDropdownCommands)) {
+      if (this.isDropdownOpen(clickCommands)) {
         dropdownOpened = true;
+        openConfirmCmds = clickCommands;
         break;
       }
 
@@ -247,8 +251,9 @@ export class ProtocolController implements IWebVisuController {
         poll++;
         const cmds = await this.forceRenderOnce(`dropdown-open-verify:${openAttempt}:${poll}:${lightId}`);
         allDropdownCommands.push(...cmds);
-        if (this.isDropdownOpen(allDropdownCommands)) {
+        if (this.isDropdownOpen(cmds)) {
           dropdownOpened = true;
+          openConfirmCmds = cmds;
           break;
         }
         const remaining = deadline - Date.now();
@@ -270,9 +275,11 @@ export class ProtocolController implements IWebVisuController {
       throw new Error(`Dropdown failed to open after ${maxOpenAttempts} attempts for light=${lightId}`);
     }
 
-    // Step 2: Dropdown is open — sync scroll state from accumulated commands.
-    this.syncDropdownStateFromCommands(allDropdownCommands, 'on-open');
-    this.dropdownLastSnapshotLabels = [];
+    // Step 2: Dropdown is open — sync scroll state from the confirmed open response.
+    // Use only the single response that confirmed the dropdown (not accumulated)
+    // to avoid stale labels from prior renders polluting the scroll position.
+    this.syncDropdownStateFromCommands(openConfirmCmds, 'on-open');
+    let latestSnapshot = this.resolveDropdownSnapshot(openConfirmCmds);
 
     const stepCommands: PaintCommand[] = [...allDropdownCommands];
 
@@ -362,8 +369,12 @@ export class ProtocolController implements IWebVisuController {
       stepCommands.push(...reopenCmds);
       // Sync actual scroll position from reopen paint response.
       // Falls back to targetFirstVisible if the response has no parseable labels.
-      const syncedFromReopen = this.syncDropdownStateFromCommands(reopenCmds, 'post-drag-reopen');
-      if (!syncedFromReopen) {
+      const reopenSnapshot = this.resolveDropdownSnapshot(reopenCmds);
+      if (reopenSnapshot) {
+        this.dropdownFirstVisible = reopenSnapshot.firstVisible;
+        this.dropdownHandleCenterY = reopenSnapshot.handleCenterY;
+        latestSnapshot = reopenSnapshot;
+      } else {
         this.dropdownFirstVisible = targetFirstVisible;
       }
 
@@ -393,27 +404,42 @@ export class ProtocolController implements IWebVisuController {
       }
     }
 
-    // Step 4: Calculate item click Y
+    // Step 4: Resolve click coordinates from the latest snapshot.
+    // Use the label positions already captured from the dropdown open or
+    // post-drag reopen response. If the target label isn't in the snapshot,
+    // do one more forceRender to try to get it.
     const positionInView = index - this.dropdownFirstVisible;
     const visibleItems = dropdownConfig.visibleItems;
     if (positionInView < 0 || positionInView >= visibleItems) {
       throw new Error(`Dropdown row out of view after scroll: light=${lightId}, position=${positionInView}`);
     }
 
-    const dynamicClickPoint = this.resolveDropdownItemClickPointFromSnapshot(index, positionInView);
-    const itemClickYOffset = config.protocol?.dropdownItemClickYOffset ?? 2;
     let itemY: number;
-    if (dynamicClickPoint) {
-      const snapshotLabel = this.dropdownLastSnapshotLabels
-        .find(l => l.index === index && l.row === dynamicClickPoint.row);
-      const maxY = snapshotLabel ? snapshotLabel.bottom - 2 : Infinity;
-      itemY = Math.min(dynamicClickPoint.y + itemClickYOffset, maxY);
+    let clickSource: string;
+
+    // Try to find the target label in the latest snapshot.
+    let targetLabel = latestSnapshot?.labels.find(l => l.index === index) ?? null;
+    if (!targetLabel) {
+      // One more render attempt to get the label.
+      const extraCmds = await this.forceRenderOnce(`click-resolve:${lightId}`);
+      stepCommands.push(...extraCmds);
+      const extraSnap = this.resolveDropdownSnapshot(extraCmds);
+      if (extraSnap) {
+        targetLabel = extraSnap.labels.find(l => l.index === index) ?? null;
+      }
+    }
+
+    if (targetLabel) {
+      // Click at the vertical center of the text label. The PLC renders text
+      // in the upper portion of each item row — the text center is the most
+      // reliable click target.
+      itemY = Math.round((targetLabel.top + targetLabel.bottom) / 2);
+      clickSource = 'snapshot-label-center';
     } else {
-      const rowBottomY = dropdownConfig.firstItemY + ((positionInView + 1) * dropdownConfig.itemHeight) - 2;
-      itemY = Math.min(
-        dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight) + itemClickYOffset,
-        rowBottomY,
-      );
+      // Fallback: compute from the item grid with a 1/3-height offset
+      // (text sits in the upper portion of each row).
+      itemY = dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight) + Math.round(dropdownConfig.itemHeight / 3);
+      clickSource = 'computed-row';
     }
 
     logger.info({
@@ -421,8 +447,7 @@ export class ProtocolController implements IWebVisuController {
       index,
       positionInView,
       clickY: itemY,
-      clickSource: dynamicClickPoint ? 'dynamic-label-center' : 'computed-row',
-      dynamicRow: dynamicClickPoint?.row ?? null,
+      clickSource,
     }, 'Selecting dropdown item');
 
     // Step 5: Click item → mouseDown selects the item and closes the dropdown.
@@ -757,27 +782,6 @@ export class ProtocolController implements IWebVisuController {
     return Math.max(minimumFirstVisible, Math.min(preferredFirstVisible, maxFirstVisible));
   }
 
-  private resolveDropdownItemClickPointFromSnapshot(
-    targetIndex: number,
-    expectedRow: number,
-  ): { x: number; y: number; row: number } | null {
-    const dropdown = uiCoordinates.lightSwitches.dropdownList;
-    const snapshotMatches = this.dropdownLastSnapshotLabels
-      .filter((label) => label.index === targetIndex)
-      .sort((a, b) => Math.abs(a.row - expectedRow) - Math.abs(b.row - expectedRow));
-    const best = snapshotMatches[0] ?? null;
-
-    if (!best) {
-      return null;
-    }
-
-    return {
-      x: dropdown.itemX,
-      y: Math.round((best.top + best.bottom) / 2),
-      row: best.row,
-    };
-  }
-
   private extractDropdownHeaderLabel(commands: PaintCommand[]): string | null {
     const { dropdownList, dropdownArrow } = uiCoordinates.lightSwitches;
     const labels = extractTextLabels(commands);
@@ -984,7 +988,6 @@ export class ProtocolController implements IWebVisuController {
     const previousFirstVisible = this.dropdownFirstVisible;
     this.dropdownFirstVisible = snapshot.firstVisible;
     this.dropdownHandleCenterY = snapshot.handleCenterY;
-    this.dropdownLastSnapshotLabels = snapshot.labels;
 
     if (previousFirstVisible !== snapshot.firstVisible) {
       const handleTop = Math.round(snapshot.handleCenterY - 4);
@@ -1233,7 +1236,7 @@ export class ProtocolController implements IWebVisuController {
     // Reset controller state
     this.dropdownFirstVisible = 0;
     this.dropdownHandleCenterY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
-    this.dropdownLastSnapshotLabels = [];
+
     this.lastStatusByLight.clear();
     this.consecutiveEmptyRenders = 0;
     this.lastReconnectAt = Date.now();

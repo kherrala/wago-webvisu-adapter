@@ -18,7 +18,9 @@ CONTROLLER=playwright npm run dev  # Run with Playwright browser controller
 CONTROLLER=playwright HEADLESS=false npm run dev  # Playwright with visible browser
 npm start              # Run compiled dist/index.js
 
-npm run test:connection    # Test connectivity to WAGO PLC, saves screenshots
+npm run test:acceptance    # Run protocol acceptance tests against a live PLC (see docs/acceptance-tests.md)
+npm run test:acceptance -- T05  # Run only tests whose name contains "T05"
+npm run test:connection    # Test connectivity via Playwright browser, saves screenshots
 npm run calibrate          # Interactive calibration tool (visible browser)
 
 docker-compose up -d       # Start both containers
@@ -26,7 +28,7 @@ docker-compose up -d --build  # Rebuild and start
 docker-compose logs -f     # View logs
 ```
 
-There is no test suite or linter configured.
+There is no unit test suite or linter configured. Use `npm run test:acceptance` for integration testing against the live PLC.
 
 ## Architecture
 
@@ -80,6 +82,61 @@ The CoDeSys binary protocol is documented in `data/reverse-engineering/PROTOCOL.
 - Light status detection: yellow (R>140, G>140) = ON, brown = OFF — same thresholds in both controllers
 - Dual-function switches have `firstPress`/`secondPress` — toggled via `?function=2` query parameter
 - The canvas coordinates in `config.ts` are specific to the target PLC's WebVisu layout and must be recalibrated if the UI changes
+
+## WebVisu UI Behavior (Given Truths)
+
+These are verified, observed behaviors of the PLC's WebVisu interface. All UI control code must respect these as ground truth.
+
+### Napit Tab Detection
+- The Napit (light switches) tab has loaded successfully once **all** of these are painted:
+  - Three lamp icons (status indicators)
+  - Text labels: "Ohjaus", "Tallenna asetukset", "Lue asetukset", "1. painallus", "2. painallus"
+- Wait for all draw commands to be received — forcing a redraw is not necessary
+
+### Dropdown Behavior
+- The dropdown takes **multiple render cycles** to open fully — wait for paint commands to arrive rather than forcing redraws
+- A fully opened dropdown always redraws **5 dropdown selection item text labels** (with varying content depending on scroll position)
+- Selecting a dropdown item always triggers a **redraw of the three lamp icons**
+- All dropdown items and UI elements are within the visible viewport (no off-screen content)
+
+### Dropdown Selection
+- Once a dropdown item is selected, the **selected label is redrawn as the dropdown header**
+- If the selection click misses the intended item, unintended consequences occur:
+  - Elements below the dropdown may open a **dialog with an ESC button** to close
+  - The **"Ohjaus" button** might be pressed accidentally
+- These failure modes must be detected and recovered from
+
+### Dropdown Scroll State
+- On initial session load, the dropdown starts at the **top position** with the "0" item visible at the top
+- The scrollbar is always at the top on initial load
+- When the dropdown is **reused within the same session**, it retains its previously selected position
+- Dragging is **always faster** than pressing arrow keys for navigation
+- A successful drag always repaints **all 5 dropdown item text labels**
+
+### Performance Considerations
+- The PLC UI backend performance can vary; additional render cycles may be needed
+- Forcing redraws is not necessary — waiting for all draw commands to be received is sufficient
+
+## Acceptance Tests
+
+`src/test-acceptance.ts` runs 11 test cases against a live PLC to validate the
+full operation chain: connect → navigate → dropdown open → scroll → item click
+→ header verification → status read.
+
+Tests cover:
+- Row 0 and row 4 selection (no scroll)
+- Arrow-click forward scroll (small delta, ≤ 5)
+- Drag forward scroll (large delta, > 5)
+- Backward drag (always drag)
+- `plcLabel` header verification (e.g. 'Essi Kattovalo', 'Onni Kattovalo')
+- Large forward drag to near end of list (index 44)
+- Sequential polling simulation (12 switches, exercises all scroll paths)
+
+**Run locally before deploying changes to the protocol stack, config
+coordinates, or scroll logic.** On failure the test saves a rendered UI PNG
+snapshot to `data/acceptance-test-results/` and attempts to dismiss any
+accidental keypad dialog before continuing. See `docs/acceptance-tests.md` for
+failure-mode diagnostics.
 
 ## Environment Variables
 
