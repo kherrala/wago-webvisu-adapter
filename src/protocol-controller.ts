@@ -210,7 +210,7 @@ export class ProtocolController implements IWebVisuController {
   private async doSelectLightSwitchOnce(lightId: string, index: number): Promise<PaintCommand[]> {
     logger.info(`Selecting light switch: ${lightId} (index: ${index})`);
 
-    // Step 1: Press dropdown arrow and collect.
+    // Step 1: Open dropdown with verification.
     // The dropdown opens on mouseDown. pressAndCollect captures mouseDown + mouseUp responses.
     // Assumption: dropdown is closed at operation start (operations are serialized).
     const allDropdownCommands: PaintCommand[] = [];
@@ -218,16 +218,60 @@ export class ProtocolController implements IWebVisuController {
     const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
     const arrowY = uiCoordinates.lightSwitches.dropdownArrow.y;
 
-    const firstClickCommands = await this.client.pressAndCollect(arrowX, arrowY);
-    allDropdownCommands.push(...firstClickCommands);
-
     const dropdownConfig = uiCoordinates.lightSwitches.dropdownList;
     const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
     const maxFirstVisible = this.getDropdownMaxFirstVisible();
 
-    // Step 2: Dropdown is now open.
-    // The PLC preserves scroll position between opens — dropdownFirstVisible carries over
-    // from the previous selection. Arrow clicks are trusted by count.
+    const dropdownOpenTimeoutMs = config.protocol?.dropdownOpenTimeoutMs ?? 6000;
+    const maxOpenAttempts = 3;
+    let dropdownOpened = false;
+
+    for (let openAttempt = 1; openAttempt <= maxOpenAttempts; openAttempt++) {
+      const clickCommands = await this.client.pressAndCollect(arrowX, arrowY);
+      allDropdownCommands.push(...clickCommands);
+      logger.info({
+        openAttempt,
+        commandCount: clickCommands.length,
+        labelCount: extractTextLabels(clickCommands).length,
+      }, 'Dropdown open: pressAndCollect response');
+
+      if (this.isDropdownOpen(allDropdownCommands)) {
+        dropdownOpened = true;
+        break;
+      }
+
+      // Poll with forceRender until dropdown content arrives or timeout.
+      const deadline = Date.now() + dropdownOpenTimeoutMs;
+      let poll = 0;
+      while (Date.now() < deadline) {
+        poll++;
+        const cmds = await this.forceRenderOnce(`dropdown-open-verify:${openAttempt}:${poll}:${lightId}`);
+        allDropdownCommands.push(...cmds);
+        if (this.isDropdownOpen(allDropdownCommands)) {
+          dropdownOpened = true;
+          break;
+        }
+        const remaining = deadline - Date.now();
+        if (remaining > 0) {
+          await this.delay(Math.min(200, remaining));
+        }
+      }
+
+      if (dropdownOpened) break;
+
+      // Dropdown didn't open — click arrow again to close (in case it partially opened), then retry.
+      if (openAttempt < maxOpenAttempts) {
+        logger.warn({ lightId, openAttempt }, 'Dropdown not verified as open; closing and retrying');
+        await this.client.pressAndCollect(arrowX, arrowY);
+      }
+    }
+
+    if (!dropdownOpened) {
+      throw new Error(`Dropdown failed to open after ${maxOpenAttempts} attempts for light=${lightId}`);
+    }
+
+    // Step 2: Dropdown is open — sync scroll state from accumulated commands.
+    this.syncDropdownStateFromCommands(allDropdownCommands, 'on-open');
     this.dropdownLastSnapshotLabels = [];
 
     const stepCommands: PaintCommand[] = [...allDropdownCommands];
@@ -237,78 +281,69 @@ export class ProtocolController implements IWebVisuController {
       const targetFirstVisible = this.getTargetFirstVisible(index, maxFirstVisible);
       const delta = targetFirstVisible - this.dropdownFirstVisible;
       const absDelta = Math.abs(delta);
-      const scrollApproach = config.protocol?.scrollApproach ?? 'arrow';
 
-      // Use drag when: scrollApproach='drag', scrolling back toward 0, or delta is large.
-      // Arrow clicks are unreliable beyond ~5 positions (each click is a full HTTP round-trip;
-      // the PLC scroll can fall short of the target after many sequential clicks).
-      const DRAG_THRESHOLD = 5;
-      const useDrag = scrollApproach === 'drag' || delta < 0 || absDelta > DRAG_THRESHOLD;
+      // Drag the scrollbar thumb to the target position. The mouseUp on the thumb
+      // CLOSES the dropdown (observed behavior). After drag, reopen to proceed with item click.
+      const dragStartHoldMs = config.protocol?.dragStartHoldMs ?? 60;
+      const dragStepDelayMs = config.protocol?.dragStepDelayMs ?? 45;
+      const dragEndHoldMs = config.protocol?.dragEndHoldMs ?? 50;
+      const scrollbarX = scrollbarConfig.x;
+      const currentHandleY = Math.round(this.getDropdownScrollY(this.dropdownFirstVisible));
+      const targetHandleY = Math.round(this.getDropdownScrollY(targetFirstVisible));
 
-      if (useDrag) {
-        // Drag the scrollbar thumb to the target position. The mouseUp on the thumb
-        // CLOSES the dropdown (observed behavior). After drag, reopen to proceed with item click.
-        const dragStartHoldMs = config.protocol?.dragStartHoldMs ?? 60;
-        const dragStepDelayMs = config.protocol?.dragStepDelayMs ?? 45;
-        const dragEndHoldMs = config.protocol?.dragEndHoldMs ?? 50;
-        const scrollbarX = scrollbarConfig.x;
-        const currentHandleY = Math.round(this.getDropdownScrollY(this.dropdownFirstVisible));
-        const targetHandleY = Math.round(this.getDropdownScrollY(targetFirstVisible));
+      logger.info({
+        lightId, index,
+        currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible,
+        delta, direction: delta >= 0 ? 'down' : 'up',
+        currentHandleY, targetHandleY,
+      }, 'Dragging scrollbar thumb');
 
-        logger.info({
-          lightId, index,
-          currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible,
-          delta, direction: delta >= 0 ? 'down' : 'up',
-          currentHandleY, targetHandleY,
-        }, 'Dragging scrollbar thumb');
+      await this.client.mouseDown(scrollbarX, currentHandleY);
+      await this.delay(dragStartHoldMs);
+      const step = delta > 0 ? 4 : -4;
+      for (let y = currentHandleY + step; delta > 0 ? y < targetHandleY : y > targetHandleY; y += step) {
+        await this.client.mouseMove(scrollbarX, y);
+        await this.delay(dragStepDelayMs);
+      }
+      // Final move exactly at targetHandleY. The loop stops one step short, and the PLC
+      // tends to settle at the second-to-last move position rather than the mouseUp
+      // position. Sending an explicit move to the target ensures we land there.
+      await this.client.mouseMove(scrollbarX, targetHandleY);
+      await this.delay(dragEndHoldMs);
+      const dragUpCmds = await this.client.mouseUpAndCollect(scrollbarX, targetHandleY);
+      stepCommands.push(...dragUpCmds);
 
-        await this.client.mouseDown(scrollbarX, currentHandleY);
-        await this.delay(dragStartHoldMs);
-        const step = delta > 0 ? 4 : -4;
-        for (let y = currentHandleY + step; delta > 0 ? y < targetHandleY : y > targetHandleY; y += step) {
-          await this.client.mouseMove(scrollbarX, y);
-          await this.delay(dragStepDelayMs);
-        }
-        await this.delay(dragEndHoldMs);
-        const dragUpCmds = await this.client.mouseUpAndCollect(scrollbarX, targetHandleY);
-        stepCommands.push(...dragUpCmds);
-
-        // Dropdown CLOSED after drag mouseUp. Reopen to proceed with item click.
-        const reopenCmds = await this.client.pressAndCollect(arrowX, arrowY);
-        stepCommands.push(...reopenCmds);
-        // Sync actual scroll position from reopen paint response.
-        // Falls back to targetFirstVisible if the response has no parseable labels.
-        const syncedFromReopen = this.syncDropdownStateFromCommands(reopenCmds, 'post-drag-reopen');
-        if (!syncedFromReopen) {
-          this.dropdownFirstVisible = targetFirstVisible;
-        }
-      } else {
-        // Arrow button approach for forward scroll (delta > 0): one click per step.
-        // Arrow clicks return only scrollbar-thumb repaints (no text labels).
-        // Trust the click count — update tracked position directly, no re-read needed.
-        const scrollArrowX = scrollbarConfig.x;
-        const downArrowY = scrollbarConfig.scanRange.bottomY;
-
-        logger.info({
-          lightId, index,
-          currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible,
-          delta,
-          clicks: absDelta,
-        }, 'Scrolling dropdown via arrow button');
-
-        await this.client.mouseMove(scrollArrowX, scrollbarConfig.thumbRange.topY);
-        for (let click = 0; click < absDelta; click++) {
-          await this.client.mouseDown(scrollArrowX, downArrowY);
-          const upCmds = await this.client.mouseUpAndCollect(scrollArrowX, downArrowY);
-          stepCommands.push(...upCmds);
-        }
-
-        // Trust the click count — update position directly without re-reading labels.
+      // Dropdown CLOSED after drag mouseUp. Reopen to proceed with item click.
+      const reopenCmds = await this.client.pressAndCollect(arrowX, arrowY);
+      stepCommands.push(...reopenCmds);
+      // Sync actual scroll position from reopen paint response.
+      // Falls back to targetFirstVisible if the response has no parseable labels.
+      const syncedFromReopen = this.syncDropdownStateFromCommands(reopenCmds, 'post-drag-reopen');
+      if (!syncedFromReopen) {
         this.dropdownFirstVisible = targetFirstVisible;
       }
 
+      // After drag, check if target is visible. If not, the drag undershot —
+      // use arrow button clicks to correct the remaining few positions.
       if (!this.isDropdownIndexVisible(index)) {
-        throw new Error(`Scroll failed (${scrollApproach}): light=${lightId}, index=${index}, firstVisible=${this.dropdownFirstVisible}, targetFirstVisible=${targetFirstVisible}`);
+        const remaining = targetFirstVisible - this.dropdownFirstVisible;
+        const arrowCorrectMax = 10;
+        if (remaining > 0 && remaining <= arrowCorrectMax) {
+          logger.info({ lightId, remaining, firstVisible: this.dropdownFirstVisible, targetFirstVisible }, 'Drag undershot — correcting with arrow clicks');
+          const scrollArrowX = scrollbarConfig.x;
+          const downArrowY = scrollbarConfig.scanRange.bottomY;
+          for (let click = 0; click < remaining; click++) {
+            await this.client.mouseDown(scrollArrowX, downArrowY);
+            const upCmds = await this.client.mouseUpAndCollect(scrollArrowX, downArrowY);
+            stepCommands.push(...upCmds);
+          }
+          this.dropdownFirstVisible = targetFirstVisible;
+          // Arrow clicks keep dropdown open but don't close it. No reopen needed.
+        }
+      }
+
+      if (!this.isDropdownIndexVisible(index)) {
+        throw new Error(`Scroll failed (drag+arrow): light=${lightId}, index=${index}, firstVisible=${this.dropdownFirstVisible}, targetFirstVisible=${targetFirstVisible}`);
       }
     }
 
@@ -344,13 +379,32 @@ export class ProtocolController implements IWebVisuController {
       dynamicRow: dynamicClickPoint?.row ?? null,
     }, 'Selecting dropdown item');
 
-    // Step 5: Click item → collect commands
-    const selectCommands = await this.client.clickAndCollect(dropdownConfig.itemX, itemY);
+    // Step 5: Click item → mouseDown selects the item and closes the dropdown.
+    // The mouseDown is fire-and-forget (the PLC queues the selection event; the
+    // HTTP response returns the INTERMEDIATE render state, not the final header).
+    // After a settle delay, mouseUp goes to the dropdown arrow (safe area) to avoid
+    // hitting Ohjaus/panel buttons. Then TWO forced renders ensure the PLC has
+    // processed the selection and the header has settled to its final value.
+    await this.client.mouseDown(dropdownConfig.itemX, itemY);
+    const selectionSettleMs = config.protocol?.selectionSettleDelayMs ?? 200;
+    await this.delay(selectionSettleMs);
+    await this.client.mouseUp(arrowX, arrowY);
+    const render1 = await this.forceRenderOnce(`select-settle1:${lightId}`);
+    const render2 = await this.forceRenderOnce(`select-settle2:${lightId}`);
+    const selectCommands = [...render1, ...render2];
     stepCommands.push(...selectCommands);
 
     // Step 6: Verify the dropdown header now shows the expected item.
     // The item-click response redraws the header with the selected label.
-    // Mismatch means a wrong item was clicked — throw to trigger reconnect+retry.
+    // If mismatch — opportunistically cache status for the switch that WAS selected,
+    // then throw to trigger reconnect+retry.
+    const actualLabel = this.extractDropdownHeaderLabel(selectCommands);
+    if (actualLabel !== null) {
+      const expectedLabel = lightSwitchPlcLabels[index];
+      if (this.normalizeVisuText(actualLabel) !== this.normalizeVisuText(expectedLabel)) {
+        this.opportunisticallyCacheStatus(selectCommands, actualLabel);
+      }
+    }
     this.verifyDropdownHeader(selectCommands, lightId, index);
 
     logger.info(`Light switch ${lightId} selected`);
@@ -711,6 +765,39 @@ export class ProtocolController implements IWebVisuController {
     logger.info({ lightId, index, headerText: headerLabel }, 'Header verification passed');
   }
 
+  private opportunisticallyCacheStatus(commands: PaintCommand[], actualHeaderLabel: string): void {
+    const actualIndex = this.resolveLightIndexFromLabel(actualHeaderLabel);
+    if (actualIndex === null) {
+      logger.warn({ actualHeaderLabel }, 'Opportunistic cache: could not resolve switch index from header label');
+      return;
+    }
+
+    const sw = lightSwitchList.find(s => s.index === actualIndex);
+    if (!sw) {
+      logger.warn({ actualIndex, actualHeaderLabel }, 'Opportunistic cache: switch not found in list');
+      return;
+    }
+
+    const indicatorImages = this.resolveIndicatorImages(commands);
+    const firstPressLightId = (sw as any).firstPressLightId as string | undefined;
+    const secondPressLightId = (sw as any).secondPressLightId as string | undefined;
+
+    const key1 = firstPressLightId ?? `${sw.id}:1`;
+    const isOn1 = this.resolveLampStatus(indicatorImages.indicator1);
+    if (isOn1 !== null) this.lastStatusByLight.set(key1, isOn1);
+
+    const key2 = secondPressLightId ?? `${sw.id}:2`;
+    const isOn2 = secondPressLightId ? this.resolveLampStatus(indicatorImages.indicator2) : null;
+    if (isOn2 !== null) this.lastStatusByLight.set(key2, isOn2);
+
+    logger.info({
+      switchId: sw.id,
+      actualHeaderLabel,
+      indicator1: { key: key1, isOn: isOn1 },
+      ...(secondPressLightId ? { indicator2: { key: key2, isOn: isOn2 } } : {}),
+    }, 'Opportunistically cached status for accidentally-selected switch');
+  }
+
   private getDropdownScrollY(firstVisible: number, maxFirstVisible: number = this.getDropdownMaxFirstVisible()): number {
     const topY = uiCoordinates.lightSwitches.scrollbar.thumbRange.topY;
     const bottomY = uiCoordinates.lightSwitches.scrollbar.thumbRange.bottomY;
@@ -938,7 +1025,9 @@ export class ProtocolController implements IWebVisuController {
     }
 
     const unresolved = indicators.filter((indicator) => resolved[indicator.key].length === 0);
-    const remaining = indexed.filter((entry) => !used.has(entry.index));
+    const remaining = indexed
+      .filter((entry) => !used.has(entry.index))
+      .filter((entry) => this.isPlausibleLampGeometry(entry.image));
     if (unresolved.length > 0 && remaining.length > 0) {
       const ordered = remaining.length === unresolved.length
         ? [...remaining].sort((a, b) => a.index - b.index)
@@ -1010,21 +1099,81 @@ export class ProtocolController implements IWebVisuController {
     return allCommands;
   }
 
+  private static readonly NAPIT_REQUIRED_LABELS = [
+    'ohjaus',
+    'tallenna asetukset',
+    'lue asetukset',
+    '1. painallus',
+    '2. painallus',
+  ];
+
+  private isNapitTabLoaded(commands: PaintCommand[]): boolean {
+    const lampCount = extractDrawImages(commands)
+      .filter(img => this.isLampStatusImageId(img.imageId))
+      .length;
+    if (lampCount < 3) return false;
+
+    const labels = extractTextLabels(commands);
+    const normalizedTexts = new Set(labels.map(l => this.normalizeVisuText(l.text)));
+    return ProtocolController.NAPIT_REQUIRED_LABELS.every(req => normalizedTexts.has(req));
+  }
+
+  private isDropdownOpen(commands: PaintCommand[]): boolean {
+    const dropdown = uiCoordinates.lightSwitches.dropdownList;
+    const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
+    const listTop = dropdown.firstItemY;
+    const listBottom = dropdown.firstItemY + (dropdown.itemHeight * dropdown.visibleItems);
+    const listLeft = Math.max(0, dropdown.itemX - 260);
+    const listRight = arrowX + 8;
+
+    const labels = extractTextLabels(commands);
+    const dropdownLabels = labels
+      .filter(l => l.top >= listTop && l.bottom <= listBottom)
+      .filter(l => l.right >= listLeft && l.left <= listRight)
+      .filter(l => this.resolveLightIndexFromLabel(l.text) !== null);
+
+    // A fully opened dropdown always redraws 5 dropdown item text labels.
+    return dropdownLabels.length >= 5;
+  }
+
   private async navigateToNapitTab(): Promise<void> {
     const coords = uiCoordinates.tabs.napit;
-    logger.info(`Clicking Napit tab at (${coords.x}, ${coords.y})`);
-    // The Napit tab renders on mouseDown (the PLC navigates and sends the full Napit panel
-    // paint data in the mouseDown response). mouseUp returns 0 commands.
-    // pressAndCollect captures both, so the 350-command mouseDown response is not discarded.
-    const clickCommands = await this.client.pressAndCollect(coords.x, coords.y);
-    const images = extractDrawImages(clickCommands);
-    const lampImages = images.filter(img => this.isLampStatusImageId(img.imageId));
-    const labels = extractTextLabels(clickCommands);
-    logger.info({
-      commandCount: clickCommands.length,
-      lampImageCount: lampImages.length,
-      labelCount: labels.length,
-    }, 'Napit tab navigation complete');
+    const timeoutMs = config.protocol?.initialRenderTimeoutMs ?? ProtocolController.DEFAULT_INITIAL_RENDER_TIMEOUT_MS;
+    const maxAttempts = 3;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      logger.info({ attempt }, `Clicking Napit tab at (${coords.x}, ${coords.y})`);
+      const accumulated: PaintCommand[] = [];
+
+      const clickCommands = await this.client.pressAndCollect(coords.x, coords.y);
+      accumulated.push(...clickCommands);
+
+      if (this.isNapitTabLoaded(accumulated)) {
+        logger.info({ attempt, commandCount: accumulated.length }, 'Napit tab loaded after click');
+        return;
+      }
+
+      // Poll with forceRender until the tab content arrives or timeout.
+      const deadline = Date.now() + timeoutMs;
+      let poll = 0;
+      while (Date.now() < deadline) {
+        poll++;
+        const cmds = await this.forceRenderOnce(`napit-verify:${attempt}:${poll}`);
+        accumulated.push(...cmds);
+        if (this.isNapitTabLoaded(accumulated)) {
+          logger.info({ attempt, poll, commandCount: accumulated.length }, 'Napit tab loaded after polling');
+          return;
+        }
+        const remaining = deadline - Date.now();
+        if (remaining > 0) {
+          await this.delay(Math.min(200, remaining));
+        }
+      }
+
+      logger.warn({ attempt, commandCount: accumulated.length }, 'Napit tab not verified within timeout');
+    }
+
+    throw new Error(`Napit tab navigation failed after ${maxAttempts} attempts`);
   }
 
   private async doReconnect(reason: string): Promise<void> {
