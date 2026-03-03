@@ -308,31 +308,59 @@ export class ProtocolController implements IWebVisuController {
     const targetFirstVisible = this.getTargetFirstVisible(index, maxFirstVisible);
     const scrollbarX = scrollbarConfig.x;
 
-    // 3b: Drag scroll.
-    // Uses a drag → mouseUp → reopen loop. The drag + verify (nudge) while the
-    // mouse is held down is accurate, but mouseUp + reopen can cause the PLC to
-    // jump to a different scroll position (overshoot). Re-dragging from the actual
-    // position converges quickly (each retry has a shorter distance, smaller overshoot).
+    // 3b: Scroll loop — arrow clicks for small deltas, drag for large ones.
+    const ARROW_THRESHOLD = 5;
     const dragStartHoldMs = config.protocol?.dragStartHoldMs ?? 60;
     const maxScrollAttempts = 6;
 
     for (let scrollAttempt = 0; scrollAttempt < maxScrollAttempts && !this.isDropdownIndexVisible(index); scrollAttempt++) {
       const delta = targetFirstVisible - this.dropdownFirstVisible;
+      const absDelta = Math.abs(delta);
 
-      // Backward scroll (delta < 0): The PLC silently ignores upward scrollbar
-      // drags regardless of step size or intermediate moves. Instead, reconnect
-      // to reset the session (dropdown scroll goes back to firstVisible=0),
-      // then throw to let the retry loop redo the selection with a forward drag.
-      if (delta < 0) {
+      if (absDelta <= ARROW_THRESHOLD) {
+        // Arrow-click path: click the up or down arrow button |delta| times.
+        // Each click scrolls by exactly 1 item. Works reliably for both
+        // forward and backward scrolling without needing close/reopen.
+        const arrowBtn = delta > 0 ? scrollbarConfig.arrowDown : scrollbarConfig.arrowUp;
+        const arrowAllCmds: PaintCommand[] = [];
+
         logger.info({
-          lightId, index, scrollAttempt,
-          currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible, delta,
-        }, 'Backward scroll needed — reconnecting to reset dropdown to top');
-        await this.doReconnect('backward-scroll-reset');
-        throw new Error(`Backward scroll needed for light=${lightId}: reconnected to reset scroll position`);
+          lightId, index, scrollAttempt, delta, absDelta,
+          direction: delta > 0 ? 'down' : 'up',
+          arrowX: arrowBtn.x, arrowY: arrowBtn.y,
+        }, 'Arrow-click scroll');
+
+        for (let i = 0; i < absDelta; i++) {
+          const clickCmds = await this.client.pressAndCollect(arrowBtn.x, arrowBtn.y);
+          arrowAllCmds.push(...clickCmds);
+          stepCommands.push(...clickCmds);
+          if (i < absDelta - 1) await this.delay(150);
+        }
+
+        // Poll for any remaining paint updates after the last arrow click.
+        await this.delay(150);
+        const arrowPollCmds = await this.pollPaintCommands(`arrow-scroll:${scrollAttempt}`);
+        arrowAllCmds.push(...arrowPollCmds);
+        stepCommands.push(...arrowPollCmds);
+
+        // Sync state from the arrow-click responses.
+        const snapshot = this.resolveDropdownSnapshot(arrowAllCmds);
+        if (snapshot) {
+          this.dropdownFirstVisible = snapshot.firstVisible;
+          this.dropdownHandleCenterY = snapshot.handleCenterY;
+          latestSnapshot = snapshot;
+          logger.info({ scrollAttempt, firstVisible: snapshot.firstVisible }, 'Arrow-scroll snapshot synced');
+        } else {
+          // Trust arithmetic: each arrow click moves by 1
+          this.dropdownFirstVisible += delta;
+          logger.info({ scrollAttempt, firstVisible: this.dropdownFirstVisible }, 'Arrow-scroll: no snapshot, trusting arithmetic');
+        }
+        continue;  // Re-check visibility at top of loop
       }
 
-      // Use the tracked handle Y (detected from paint data when available) for the drag start.
+      // Drag path for large deltas (both forward and backward).
+      // Uses a drag → mouseUp → close/reopen loop. Re-dragging from the actual
+      // position converges quickly (each retry has a shorter distance).
       const currentHandleY = Math.round(this.dropdownHandleCenterY);
       const targetHandleY = Math.round(this.getDropdownScrollY(targetFirstVisible));
 
@@ -340,10 +368,8 @@ export class ProtocolController implements IWebVisuController {
         lightId, index, scrollAttempt,
         currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible,
         delta, currentHandleY, targetHandleY,
-      }, 'Dragging scrollbar thumb (forward)');
+      }, 'Dragging scrollbar thumb');
 
-      // Forward drags (down): Single mouseMove works reliably (on 2nd attempt
-      // after the initial close/reopen primes the scrollbar).
       await this.client.mouseDown(scrollbarX, currentHandleY);
       await this.delay(dragStartHoldMs);
 

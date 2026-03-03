@@ -1,4 +1,4 @@
-import { config, lightList, lightById, lightPrimaryController, lightSwitches } from './config';
+import { config, lightList, lightById, lightPrimaryController, lightSwitches, lightSwitchById } from './config';
 import { IWebVisuController } from './controller-interface';
 import { upsertLightStatus, setMetadata, getMetadata } from './database';
 import pino from 'pino';
@@ -65,6 +65,10 @@ async function pollLoop(): Promise<void> {
     logger.info(`Resuming polling from index ${currentIndex}`);
   }
 
+  // Track light IDs already stored as siblings of a dual-function switch
+  // within this cycle, so we skip redundant switch selections.
+  const siblingPolled = new Set<string>();
+
   while (!shouldStop) {
     // Wait if there are pending operations
     const pendingOps = controller.getPendingOperationCount();
@@ -77,6 +81,23 @@ async function pollLoop(): Promise<void> {
     const lightId = pollableLightIds[currentIndex];
     const light = lightById[lightId];
     const primary = lightPrimaryController[lightId];
+
+    // Skip if this light was already stored as a sibling of a dual-function switch.
+    if (siblingPolled.has(lightId)) {
+      siblingPolled.delete(lightId);
+      logger.debug(`Skipping ${lightId} — already polled as sibling`);
+      currentIndex++;
+      setMetadata('lastPollIndex', String(currentIndex));
+      if (currentIndex >= pollableLightIds.length) {
+        currentIndex = 0;
+        cycleCount++;
+        siblingPolled.clear();
+        setMetadata('lastPollIndex', '0');
+        logger.info(`Completed polling cycle ${cycleCount}, waiting ${config.polling.cycleDelayMs}ms before next cycle`);
+        await delay(config.polling.cycleDelayMs);
+      }
+      continue;
+    }
 
     try {
       logger.debug(`Polling light ${lightId} (${currentIndex + 1}/${pollableLightIds.length})`);
@@ -92,6 +113,29 @@ async function pollLoop(): Promise<void> {
         firstPress: light?.name ?? null,
         secondPress: null,
       });
+
+      // For dual-function switches, also store the sibling light's status
+      // from the same getLightStatus call (which already read both indicators).
+      const sw = lightSwitchById[primary.switchId] as typeof lightSwitchById[string] & {
+        firstPressLightId?: string;
+        secondPressLightId?: string;
+      };
+      const siblingLightId = primary.functionNumber === 1 ? sw.secondPressLightId : sw.firstPressLightId;
+      const siblingIsOn = primary.functionNumber === 1 ? switchStatus.isOn2 : switchStatus.isOn;
+
+      if (siblingLightId && siblingIsOn !== undefined) {
+        const siblingLight = lightById[siblingLightId];
+        upsertLightStatus({
+          id: siblingLightId,
+          name: siblingLight?.name ?? siblingLightId,
+          isOn: siblingIsOn,
+          isOn2: undefined,
+          firstPress: siblingLight?.name ?? null,
+          secondPress: null,
+        });
+        siblingPolled.add(siblingLightId);
+        logger.debug(`Also stored sibling ${siblingLightId}: isOn=${siblingIsOn}`);
+      }
 
       lastPollTime = new Date();
       pollCount++;
@@ -109,6 +153,7 @@ async function pollLoop(): Promise<void> {
     if (currentIndex >= pollableLightIds.length) {
       currentIndex = 0;
       cycleCount++;
+      siblingPolled.clear();
       setMetadata('lastPollIndex', '0');
       logger.info(`Completed polling cycle ${cycleCount}, waiting ${config.polling.cycleDelayMs}ms before next cycle`);
 
