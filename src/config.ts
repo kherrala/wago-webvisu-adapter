@@ -309,8 +309,14 @@ const lightSwitchFloors: Record<number, 0 | 1 | 2> = {
 };
 
 // Maps light ID → floor level via primary controller switch.
+// Outdoor/unclassified lights are explicitly excluded so they appear
+// as "Muut tilat" (floor=null) in the API and Grafana dashboard.
+const outdoorLightIds = new Set([
+  'terassi-ulkovalo', 'varasto-ulkovalo', 'sisaankaynti', 'autokatos', 'varasto',
+]);
 export const lightFloorMap: Record<string, 0 | 1 | 2> = {};
 for (const [lightId, { switchId }] of Object.entries(lightPrimaryController)) {
+  if (outdoorLightIds.has(lightId)) continue;
   const sw = lightSwitchById[switchId];
   if (sw) {
     const floor = lightSwitchFloors[sw.index];
