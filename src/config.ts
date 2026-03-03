@@ -50,7 +50,7 @@ export const config = {
     selectionSettleDelayMs: parseInt(process.env.PROTOCOL_SELECTION_SETTLE_DELAY_MS || '200', 10),
     selectionVerifyTimeoutMs: parseInt(process.env.PROTOCOL_SELECTION_VERIFY_TIMEOUT_MS || '0', 10),
     selectionVerifyPollIntervalMs: parseInt(process.env.PROTOCOL_SELECTION_VERIFY_POLL_INTERVAL_MS || '0', 10),
-    maxSelectionAttempts: parseInt(process.env.PROTOCOL_MAX_SELECTION_ATTEMPTS || '3', 10),
+    maxSelectionAttempts: parseInt(process.env.PROTOCOL_MAX_SELECTION_ATTEMPTS || '5', 10),
     togglePreClickDelayMs: parseInt(process.env.PROTOCOL_TOGGLE_PRE_CLICK_DELAY_MS || '0', 10),
     togglePressHoldMs: parseInt(process.env.PROTOCOL_TOGGLE_PRESS_HOLD_MS || '140', 10),
     togglePostClickDelayMs: parseInt(process.env.PROTOCOL_TOGGLE_POST_CLICK_DELAY_MS || '0', 10),

@@ -193,13 +193,13 @@ export class ProtocolController implements IWebVisuController {
     });
   }
 
-  private async doSelectLightSwitch(lightId: string): Promise<PaintCommand[]> {
+  private async doSelectLightSwitch(lightId: string): Promise<{ allCommands: PaintCommand[]; postSelectionCommands: PaintCommand[] }> {
     const index = lightSwitches[lightId];
     if (index === undefined) {
       throw new Error(`Unknown light switch: ${lightId}. Valid IDs: ${Object.keys(lightSwitches).join(', ')}`);
     }
 
-    const maxAttempts = config.protocol?.maxSelectionAttempts ?? 3;
+    const maxAttempts = config.protocol?.maxSelectionAttempts ?? 5;
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -208,13 +208,16 @@ export class ProtocolController implements IWebVisuController {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         logger.warn({ err: lastError, lightId, attempt, maxAttempts }, 'Selection attempt failed, retrying without reconnect');
+        // Reset dropdown state so the next attempt discovers the scroll
+        // position from paint data rather than using stale tracked state.
+        this.resetDropdownState();
       }
     }
 
     throw lastError!;
   }
 
-  private async doSelectLightSwitchOnce(lightId: string, index: number): Promise<PaintCommand[]> {
+  private async doSelectLightSwitchOnce(lightId: string, index: number): Promise<{ allCommands: PaintCommand[]; postSelectionCommands: PaintCommand[] }> {
     logger.info(`Selecting light switch: ${lightId} (index: ${index})`);
 
     // Step 1: Open dropdown with verification.
@@ -302,19 +305,33 @@ export class ProtocolController implements IWebVisuController {
     const stepCommands: PaintCommand[] = [...allDropdownCommands];
 
     // Step 3: Scroll to bring the target into view.
+    const targetFirstVisible = this.getTargetFirstVisible(index, maxFirstVisible);
+    const scrollbarX = scrollbarConfig.x;
+
+    // 3b: Drag scroll.
     // Uses a drag → mouseUp → reopen loop. The drag + verify (nudge) while the
     // mouse is held down is accurate, but mouseUp + reopen can cause the PLC to
     // jump to a different scroll position (overshoot). Re-dragging from the actual
     // position converges quickly (each retry has a shorter distance, smaller overshoot).
-    const targetFirstVisible = this.getTargetFirstVisible(index, maxFirstVisible);
     const dragStartHoldMs = config.protocol?.dragStartHoldMs ?? 60;
-    const dragStepDelayMs = config.protocol?.dragStepDelayMs ?? 45;
-    const dragEndHoldMs = config.protocol?.dragEndHoldMs ?? 50;
-    const scrollbarX = scrollbarConfig.x;
-    const maxScrollAttempts = 4;
+    const maxScrollAttempts = 6;
 
     for (let scrollAttempt = 0; scrollAttempt < maxScrollAttempts && !this.isDropdownIndexVisible(index); scrollAttempt++) {
       const delta = targetFirstVisible - this.dropdownFirstVisible;
+
+      // Backward scroll (delta < 0): The PLC silently ignores upward scrollbar
+      // drags regardless of step size or intermediate moves. Instead, reconnect
+      // to reset the session (dropdown scroll goes back to firstVisible=0),
+      // then throw to let the retry loop redo the selection with a forward drag.
+      if (delta < 0) {
+        logger.info({
+          lightId, index, scrollAttempt,
+          currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible, delta,
+        }, 'Backward scroll needed — reconnecting to reset dropdown to top');
+        await this.doReconnect('backward-scroll-reset');
+        throw new Error(`Backward scroll needed for light=${lightId}: reconnected to reset scroll position`);
+      }
+
       // Use the tracked handle Y (detected from paint data when available) for the drag start.
       const currentHandleY = Math.round(this.dropdownHandleCenterY);
       const targetHandleY = Math.round(this.getDropdownScrollY(targetFirstVisible));
@@ -322,97 +339,43 @@ export class ProtocolController implements IWebVisuController {
       logger.info({
         lightId, index, scrollAttempt,
         currentFirstVisible: this.dropdownFirstVisible, targetFirstVisible,
-        delta, direction: delta >= 0 ? 'down' : 'up',
-        currentHandleY, targetHandleY,
-      }, 'Dragging scrollbar thumb');
+        delta, currentHandleY, targetHandleY,
+      }, 'Dragging scrollbar thumb (forward)');
 
-      // Drag the scrollbar thumb to the target position.
+      // Forward drags (down): Single mouseMove works reliably (on 2nd attempt
+      // after the initial close/reopen primes the scrollbar).
       await this.client.mouseDown(scrollbarX, currentHandleY);
       await this.delay(dragStartHoldMs);
-      const step = delta > 0 ? 2 : -2;
-      for (let y = currentHandleY + step; delta > 0 ? y < targetHandleY : y > targetHandleY; y += step) {
-        await this.client.mouseMove(scrollbarX, y);
-        await this.delay(dragStepDelayMs);
-      }
-      const finalMoveCmds = await this.client.mouseMoveAndCollect(scrollbarX, targetHandleY);
-      stepCommands.push(...finalMoveCmds);
-      await this.delay(dragEndHoldMs);
 
-      // Verify scroll position from paint data while mouse is still held.
-      // Nudge if the PLC undershot/overshot.
-      let dragVerifyAccum: PaintCommand[] = [...finalMoveCmds];
-      const dragVerifyDeadline = Date.now() + 3000;
-      let verifyPolls = 0;
-      let dragY = targetHandleY;
-      let lastVerifiedFirst: number | null = null;
-      let stuckCount = 0;
-      while (Date.now() < dragVerifyDeadline) {
-        verifyPolls++;
-        const settleCmds = await this.pollPaintCommands(`drag-verify:${scrollAttempt}:${verifyPolls}:${lightId}`);
-        dragVerifyAccum.push(...settleCmds);
-        stepCommands.push(...settleCmds);
-        const snapshot = this.resolveDropdownSnapshot(dragVerifyAccum);
-        if (snapshot) {
-          const actualFirst = snapshot.firstVisible;
-          logger.info({ scrollAttempt, verifyPolls, actualFirst, targetFirstVisible, delta: targetFirstVisible - actualFirst }, 'Drag position verified');
+      const dragCmds = await this.client.mouseMoveAndCollect(scrollbarX, targetHandleY);
+      stepCommands.push(...dragCmds);
 
-          if (actualFirst === targetFirstVisible) break;
-
-          // Detect if the drag is stuck (position not changing despite nudges).
-          // This happens when mouseDown hit the track instead of the handle.
-          if (lastVerifiedFirst !== null && actualFirst === lastVerifiedFirst) {
-            stuckCount++;
-            if (stuckCount >= 2) {
-              logger.warn({ scrollAttempt, actualFirst, targetFirstVisible, dragY }, 'Drag stuck — likely missed handle, will release and re-drag');
-              break;
-            }
-          } else {
-            stuckCount = 0;
-          }
-          lastVerifiedFirst = actualFirst;
-
-          let correction = this.getDropdownScrollY(targetFirstVisible) - this.getDropdownScrollY(actualFirst);
-          // Ensure a minimum correction when formula returns 0 (e.g., both positions
-          // map to the same clamped boundary) but we haven't reached the target.
-          const itemDelta = targetFirstVisible - actualFirst;
-          if (Math.abs(correction) < 1 && itemDelta !== 0) {
-            const pixelsPerItem = (scrollbarConfig.thumbRange.bottomY - scrollbarConfig.thumbRange.topY) / this.getDropdownMaxFirstVisible();
-            correction = itemDelta * pixelsPerItem;
-          }
-          dragY = Math.round(dragY + correction);
-          dragY = Math.max(scrollbarConfig.thumbRange.topY, Math.min(dragY, scrollbarConfig.thumbRange.bottomY));
-          logger.info({ actualFirst, targetFirstVisible, correctionPx: Math.round(correction), newDragY: dragY }, 'Nudging drag');
-          const nudgeCmds = await this.client.mouseMoveAndCollect(scrollbarX, dragY);
-          dragVerifyAccum = [...nudgeCmds];
-          stepCommands.push(...nudgeCmds);
-          await this.delay(dragEndHoldMs);
-          continue;
-        }
-        const remaining = dragVerifyDeadline - Date.now();
-        if (remaining > 0) await this.delay(Math.min(150, remaining));
-      }
+      // Let the PLC fully settle the scrollbar at the target position before
+      // releasing the mouse button. Without this delay the mouseUp can arrive
+      // before the PLC has finished processing the mouseMove.
+      await this.delay(300);
 
       // Release the scrollbar handle.
-      const dragUpCmds = await this.client.mouseUpAndCollect(scrollbarX, dragY);
+      const dragUpCmds = await this.client.mouseUpAndCollect(scrollbarX, targetHandleY);
       stepCommands.push(...dragUpCmds);
 
       // After scrollbar drag + mouseUp, the PLC's rendered labels and click
-      // targets can be out of sync. Always close and reopen the dropdown
-      // to force a full resync of both layers.
-
-      // Close: if dropdown is still open, click the arrow to close it.
-      await this.delay(100);
-      const closeCmds = await this.client.pressAndCollect(arrowX, arrowY);
-      stepCommands.push(...closeCmds);
+      // targets can be out of sync. Close and reopen the dropdown to force
+      // a full resync of both layers.
       await this.delay(200);
 
-      // Reopen: click the arrow again.
+      // Close: click the dropdown arrow.
+      const closeCmds = await this.client.pressAndCollect(arrowX, arrowY);
+      stepCommands.push(...closeCmds);
+      await this.delay(300);
+
+      // Reopen: click the dropdown arrow again.
       const reopenAccum: PaintCommand[] = [];
       const reopenCmds = await this.client.pressAndCollect(arrowX, arrowY);
       reopenAccum.push(...reopenCmds);
       stepCommands.push(...reopenCmds);
 
-      // Wait for the dropdown to fully open.
+      // Wait for the dropdown to fully open (5 text labels).
       if (!this.isDropdownOpen(reopenAccum)) {
         const reopenDeadline = Date.now() + 4000;
         while (Date.now() < reopenDeadline) {
@@ -431,9 +394,8 @@ export class ProtocolController implements IWebVisuController {
         this.dropdownFirstVisible = reopenSnapshot.firstVisible;
         this.dropdownHandleCenterY = reopenSnapshot.handleCenterY;
         latestSnapshot = reopenSnapshot;
-        logger.info({ scrollAttempt, firstVisible: reopenSnapshot.firstVisible }, 'Post-drag reopen snapshot synced');
+        logger.info({ scrollAttempt, firstVisible: reopenSnapshot.firstVisible, handleY: Math.round(reopenSnapshot.handleCenterY) }, 'Post-drag reopen snapshot synced');
       } else {
-        // Trust the drag-verified position.
         this.dropdownFirstVisible = targetFirstVisible;
       }
 
@@ -488,22 +450,26 @@ export class ProtocolController implements IWebVisuController {
     }, 'Selecting dropdown item');
 
     // Step 5: Click item → mouseDown selects the item and closes the dropdown.
-    // After a settle delay, mouseUp goes to the dropdown arrow (safe area) to avoid
-    // hitting Ohjaus/panel buttons. Then poll for the header label to confirm
-    // the PLC has processed the selection.
-    await this.client.mouseDown(dropdownConfig.itemX, itemY);
+    // Use mouseDownAndCollect to capture the lamp icon redraws that the PLC
+    // sends immediately on selection (these are lost with plain mouseDown).
+    // After a settle delay, mouseUp goes to the dropdown arrow (safe area) to
+    // avoid hitting Ohjaus/panel buttons.
+    const itemClickCmds = await this.client.mouseDownAndCollect(dropdownConfig.itemX, itemY);
     const selectionSettleMs = config.protocol?.selectionSettleDelayMs ?? 200;
     await this.delay(selectionSettleMs);
     await this.client.mouseUp(arrowX, arrowY);
 
     // Poll for the header label to appear. The PLC may need several render
     // cycles after mouseUp to redraw the header with the selected item.
-    const selectCommands: PaintCommand[] = [];
+    // Start with the commands captured from the item click mouseDown.
+    const selectCommands: PaintCommand[] = [...itemClickCmds];
     const headerPollTimeoutMs = 3000;
     const headerPollDeadline = Date.now() + headerPollTimeoutMs;
     let headerLabel: string | null = null;
     let headerPolls = 0;
-    while (Date.now() < headerPollDeadline) {
+    // Check if the header label is already in the mouseDown response.
+    headerLabel = this.extractDropdownHeaderLabel(selectCommands);
+    while (headerLabel === null && Date.now() < headerPollDeadline) {
       headerPolls++;
       const cmds = await this.pollPaintCommands(`select-settle:${headerPolls}:${lightId}`);
       selectCommands.push(...cmds);
@@ -511,6 +477,13 @@ export class ProtocolController implements IWebVisuController {
       if (headerLabel !== null) break;
       const remaining = headerPollDeadline - Date.now();
       if (remaining > 0) await this.delay(Math.min(150, remaining));
+    }
+
+    // After finding the header, do one more poll to capture any remaining
+    // lamp icon redraws that arrive in a separate render cycle.
+    if (headerLabel !== null) {
+      const extraCmds = await this.pollPaintCommands(`select-extra:${lightId}`);
+      selectCommands.push(...extraCmds);
     }
     stepCommands.push(...selectCommands);
 
@@ -526,7 +499,7 @@ export class ProtocolController implements IWebVisuController {
     this.verifyDropdownHeader(selectCommands, lightId, index);
 
     logger.info(`Light switch ${lightId} selected`);
-    return stepCommands;
+    return { allCommands: stepCommands, postSelectionCommands: selectCommands };
   }
 
   async toggleLight(lightId: string, functionNumber: 1 | 2 = 1): Promise<void> {
@@ -599,15 +572,19 @@ export class ProtocolController implements IWebVisuController {
       const hasDualFunction = !!secondPressLightId;
       const switchName = lightSwitchNames[index] || lightId;
 
-      const selectionCommands = await this.doSelectLightSwitch(lightId);
+      const { postSelectionCommands } = await this.doSelectLightSwitch(lightId);
       const selectionSettleDelayMs = config.protocol?.selectionSettleDelayMs ?? 200;
       if (selectionSettleDelayMs > 0) {
         await this.delay(selectionSettleDelayMs);
       }
       const statusCommands = await this.pollPaintCommands(`status:${lightId}`);
-      const allCommands = [...selectionCommands, ...statusCommands];
 
-      const indicatorImages = this.resolveIndicatorImages(allCommands);
+      // Only use post-selection commands + status poll for lamp resolution.
+      // Using the full command history (including drag/reopen phases) would
+      // pick up stale lamp images from before the correct item was selected.
+      const statusRelevantCommands = [...postSelectionCommands, ...statusCommands];
+
+      const indicatorImages = this.resolveIndicatorImages(statusRelevantCommands);
 
       // Use physical light IDs as cache keys so that multiple switches controlling
       // the same light share one entry (cache hits propagate between switches).
