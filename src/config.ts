@@ -108,8 +108,8 @@ export const uiCoordinates = {
     keypadEscButton: { x: 714, y: 583 },
     scrollbar: {
       x: 528,
-      arrowUp: { x: 505, y: 152 },
-      arrowDown: { x: 505, y: 279 },
+      arrowUp: { x: 527, y: 162 },
+      arrowDown: { x: 527, y: 295 },
       scanRange: { topY: 170, bottomY: 286 },
       thumbRange: { topY: 174, bottomY: 282 },
     },
