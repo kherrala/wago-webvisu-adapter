@@ -162,10 +162,14 @@ function parseDrawImageCommand(cmd: PaintCommand): ImageDrawCommand | null {
   const namespaceLen = reader.readUint16();
   if (reader.remaining < namespaceLen + 2) return null;
   const namespace = reader.readString(namespaceLen);
+  // CoDeSys aligns string fields to 2-byte boundaries.
+  if (namespaceLen % 2 === 1 && reader.remaining > 0) reader.skip(1);
 
   const nameLen = reader.readUint16();
   if (reader.remaining < nameLen + 16 + 8) return null;
   const name = reader.readString(nameLen);
+  // Align to 2-byte boundary after name string.
+  if (nameLen % 2 === 1 && reader.remaining > 0) reader.skip(1);
   const imageId = namespace.length > 0 ? `${namespace}.${name}` : name;
 
   let minX = Number.POSITIVE_INFINITY;
