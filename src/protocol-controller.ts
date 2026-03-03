@@ -535,7 +535,6 @@ export class ProtocolController implements IWebVisuController {
 
       await this.doSelectLightSwitch(lightId);
 
-      const togglePressHoldMs = Math.max(0, config.protocol?.togglePressHoldMs ?? 140);
       const togglePostClickDelayMs = Math.max(0, config.protocol?.togglePostClickDelayMs ?? 500);
 
       const firstButton = uiCoordinates.lightSwitches.ohjausButton;
@@ -558,25 +557,29 @@ export class ProtocolController implements IWebVisuController {
         x: targetButton.x,
         y: targetButton.y,
         buttonSource,
-        holdMs: togglePressHoldMs,
       }, 'Dispatching toggle button click');
 
-      await this.client.mouseMove(targetButton.x, targetButton.y);
-      await this.client.mouseDown(targetButton.x, targetButton.y);
-      if (togglePressHoldMs > 0) {
-        await this.delay(togglePressHoldMs);
-      }
-      await this.client.mouseUp(targetButton.x, targetButton.y);
+      const clickCommands = await this.client.pressAndCollect(targetButton.x, targetButton.y);
 
       if (togglePostClickDelayMs > 0) {
         await this.delay(togglePostClickDelayMs);
       }
-      const postCommands = await this.pollPaintCommands(`toggle-post:${lightId}`);
+
+      const postRenderPolls = config.protocol?.togglePostRenderPolls ?? 2;
+      const postRenderPollDelayMs = config.protocol?.togglePostRenderPollDelayMs ?? 0;
+      let totalPostCommands = 0;
+      for (let i = 0; i < postRenderPolls; i++) {
+        if (i > 0 && postRenderPollDelayMs > 0) await this.delay(postRenderPollDelayMs);
+        const postCommands = await this.pollPaintCommands(`toggle-post:${lightId}:${i}`);
+        totalPostCommands += postCommands.length;
+      }
 
       logger.info({
         lightId,
         functionNumber,
-        postCommandCount: postCommands.length,
+        clickCommandCount: clickCommands.length,
+        postRenderPolls,
+        totalPostCommands,
       }, 'Toggle render settle complete');
 
       logger.info(`Light ${lightId} function ${functionNumber} toggled`);

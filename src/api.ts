@@ -10,7 +10,7 @@ import {
   lightSwitchNames,
   lightFloorMap,
 } from './config';
-import { getAllCachedStatuses, upsertLightStatus } from './database';
+import { getAllCachedStatuses, getLightStatus as getCachedLightStatus, upsertLightStatus } from './database';
 import { getPollingStatus } from './polling-service';
 import pino from 'pino';
 
@@ -81,9 +81,10 @@ app.get('/api/lights', async (req: Request, res: Response) => {
   }
 });
 
-// Get live status of a physical light by light ID
+// Get status of a physical light by light ID (cached by default, ?live=true for PLC query)
 app.get('/api/lights/:lightId', async (req: Request, res: Response) => {
   const { lightId } = req.params;
+  const live = req.query.live === 'true';
 
   const light = lightById[lightId];
   if (!light) {
@@ -101,19 +102,27 @@ app.get('/api/lights/:lightId', async (req: Request, res: Response) => {
   }
 
   try {
-    const switchStatus = await controller.getLightStatus(primary.switchId);
-    // Extract the correct indicator based on which function controls this light
-    const isOn = primary.functionNumber === 2 ? switchStatus.isOn2 ?? false : switchStatus.isOn;
+    let isOn: boolean | null = null;
+    let polledAt: string | null = null;
 
-    // Store in database keyed by light ID
-    upsertLightStatus({
-      id: lightId,
-      name: light.name,
-      isOn,
-      isOn2: undefined,
-      firstPress: light.name,
-      secondPress: null,
-    });
+    if (live) {
+      const switchStatus = await controller.getLightStatus(primary.switchId);
+      isOn = primary.functionNumber === 2 ? switchStatus.isOn2 ?? false : switchStatus.isOn;
+
+      upsertLightStatus({
+        id: lightId,
+        name: light.name,
+        isOn,
+        isOn2: undefined,
+        firstPress: light.name,
+        secondPress: null,
+      });
+      polledAt = new Date().toISOString();
+    } else {
+      const cached = getCachedLightStatus(lightId);
+      isOn = cached?.isOn ?? null;
+      polledAt = cached?.polledAt ?? null;
+    }
 
     const controllers = lightAllControllers[lightId] ?? [];
 
@@ -122,6 +131,8 @@ app.get('/api/lights/:lightId', async (req: Request, res: Response) => {
       name: light.name,
       floor: lightFloorMap[lightId] ?? null,
       isOn,
+      polledAt,
+      source: live ? 'live' : 'cache',
       controllers: controllers.map(c => ({
         switchId: c.switchId,
         switchName: lightSwitchNames[lightSwitches[c.switchId]] ?? c.switchId,
@@ -160,10 +171,13 @@ app.post('/api/lights/:lightId/toggle', async (req: Request, res: Response) => {
   try {
     await controller.toggleLight(primary.switchId, primary.functionNumber);
 
+    const cached = getCachedLightStatus(lightId);
+
     res.json({
       message: 'Light toggled successfully',
       id: lightId,
       name: light.name,
+      isOn: cached?.isOn ?? null,
       via: {
         switchId: primary.switchId,
         switchName: lightSwitchNames[lightSwitches[primary.switchId]] ?? primary.switchId,
