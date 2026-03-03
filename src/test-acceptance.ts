@@ -116,6 +116,14 @@ async function runTest(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+async function reconnect(label: string): Promise<void> {
+  console.log(`    [${label}] Reconnecting for fresh session...`);
+  await controller.close();
+  await controller.initialize();
+  const ok = await controller.isConnected();
+  if (!ok) throw new Error(`Reconnect failed in ${label}`);
+}
+
 function assertStatus(switchId: string, status: LightStatus): void {
   if (typeof status.isOn !== 'boolean') {
     throw new Error(
@@ -153,8 +161,11 @@ async function T02_row0_no_scroll(): Promise<void> {
  * T03-row4-no-scroll
  * Select wc-alakerta-2 (index 4) — last row visible when firstVisible=0
  * (rows 0–4 visible). Tests clicking the bottom-most visible row.
+ * Reconnects first to guarantee a fresh session at scroll position 0,
+ * since T02 may have shifted the dropdown state.
  */
 async function T03_row4_no_scroll(): Promise<void> {
+  await reconnect('T03');
   const status = await controller.getLightStatus('wc-alakerta-2');
   assertStatus('wc-alakerta-2', status);
   console.log(`    wc-alakerta-2 (index 4): isOn=${status.isOn}`);
@@ -184,10 +195,17 @@ async function T05_drag_forward_large(): Promise<void> {
 
 /**
  * T06-backward-scroll
- * Select kylpyhuone-1 (index 1) after being at index 24. Forces backward
- * drag (delta < 0), which always uses the drag path.
+ * Reconnects to guarantee a known starting position, then selects
+ * kylpyhuone-yk-2 (index 24) to move the scroll forward, followed by
+ * kylpyhuone-1 (index 1) to force a backward scroll (delta < 0).
  */
 async function T06_backward_scroll(): Promise<void> {
+  await reconnect('T06');
+  // Move forward first to establish a high scroll position.
+  const fwd = await controller.getLightStatus('kylpyhuone-yk-2');
+  assertStatus('kylpyhuone-yk-2', fwd);
+  console.log(`    kylpyhuone-yk-2 (index 24, setup): isOn=${fwd.isOn}`);
+
   const status = await controller.getLightStatus('kylpyhuone-1');
   assertStatus('kylpyhuone-1', status);
   console.log(`    kylpyhuone-1 (index 1, backward from 24): isOn=${status.isOn}`);
