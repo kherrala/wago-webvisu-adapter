@@ -73,6 +73,12 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       postDataInHeader: config.protocol?.postDataInHeader ?? 'auto',
       deviceUsername: config.protocol?.deviceUsername ?? '',
       devicePassword: config.protocol?.devicePassword ?? '',
+      strictPaintValidation: config.protocol?.strictPaintValidation ?? true,
+      renderSettleMinEmptyPolls: config.protocol?.renderSettleMinEmptyPolls ?? 2,
+      renderSettleMaxPolls: config.protocol?.renderSettleMaxPolls ?? 8,
+      renderSettlePollIntervalMs: config.protocol?.renderSettlePollIntervalMs ?? 80,
+      renderSettleHashStreak: config.protocol?.renderSettleHashStreak ?? 0,
+      renderSettleTimeoutMs: config.protocol?.renderSettleTimeoutMs ?? 0,
       onPaintFrame: (frame) => {
         this.debugRenderer?.record(frame);
       },
@@ -434,19 +440,22 @@ export class ProtocolController implements IWebVisuController, CommandContext {
         await this.delay(togglePostClickDelayMs);
       }
 
-      const postRenderPolls = config.protocol?.togglePostRenderPolls ?? 2;
-      const postRenderPollDelayMs = config.protocol?.togglePostRenderPollDelayMs ?? 0;
-      let totalPostCommands = 0;
-      for (let i = 0; i < postRenderPolls; i++) {
-        if (i > 0 && postRenderPollDelayMs > 0) await this.delay(postRenderPollDelayMs);
-        const postCommands = await this.pollPaintCommands(`toggle-post:${lightId}:${i}`);
-        totalPostCommands += postCommands.length;
-      }
+      const postRenderPolls = Math.max(1, config.protocol?.togglePostRenderPolls ?? 2);
+      const postRenderPollDelayMs = Math.max(0, config.protocol?.togglePostRenderPollDelayMs ?? 0);
+      const settleResult = await this.client.waitForRenderSettled({
+        reason: `toggle-post:${lightId}`,
+        maxPolls: postRenderPolls,
+        pollIntervalMs: postRenderPollDelayMs,
+      });
+      const totalPostCommands = settleResult.commands.length;
 
       logger.info({
         lightId, functionNumber,
         clickCommandCount: clickCommands.length,
         postRenderPolls, totalPostCommands,
+        settleBy: settleResult.settledBy,
+        settlePolls: settleResult.polls,
+        settleDurationMs: settleResult.durationMs,
       }, 'Toggle render settle complete');
 
       logger.info(`Light ${lightId} function ${functionNumber} toggled`);
@@ -473,7 +482,19 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       if (selectionSettleDelayMs > 0) {
         await this.delay(selectionSettleDelayMs);
       }
-      const statusCommands = await this.pollPaintCommands(`status:${lightId}`);
+      const statusSettle = await this.client.waitForRenderSettled({
+        reason: `status:${lightId}`,
+        maxPolls: Math.max(1, config.protocol?.statusMaxAttempts ?? 3),
+        pollIntervalMs: Math.max(0, config.protocol?.statusPollDelayMs ?? 0),
+      });
+      const statusCommands = statusSettle.commands;
+      logger.debug({
+        lightId,
+        settleBy: statusSettle.settledBy,
+        settlePolls: statusSettle.polls,
+        settleDurationMs: statusSettle.durationMs,
+        settleCommandCount: statusCommands.length,
+      }, 'Status render settle');
       const statusRelevantCommands = [...postSelectionCommands, ...statusCommands];
 
       const indicatorImages = resolveIndicatorImages(statusRelevantCommands);

@@ -3,7 +3,7 @@
 import fs from 'fs';
 import https from 'https';
 import path from 'path';
-import { constants, createPublicKey, publicEncrypt } from 'crypto';
+import { constants, createHash, createPublicKey, publicEncrypt } from 'crypto';
 import {
   buildOpenConnection,
   parseOpenConnectionResponse,
@@ -35,6 +35,7 @@ import {
 } from './messages';
 import { extractDrawImages, extractTextLabels, parsePaintCommands, PaintCommand } from './paint-commands';
 import { BinaryReader, findTlvEntry, parseFrame, readTlvEntries } from './binary';
+import { getPaintCommandReferenceName } from './command-registry';
 import pino from 'pino';
 
 const logger = pino({ name: 'protocol-client' });
@@ -85,6 +86,24 @@ export interface ProtocolPaintFrame {
   commands: PaintCommand[];
 }
 
+export interface RenderSettleOptions {
+  reason?: string;
+  minEmptyPolls?: number;
+  maxPolls?: number;
+  pollIntervalMs?: number;
+  hashStreak?: number;
+  timeoutMs?: number;
+}
+
+export interface RenderSettleResult {
+  commands: PaintCommand[];
+  polls: number;
+  emptyStreak: number;
+  hashStreak: number;
+  settledBy: 'empty-streak' | 'hash-streak' | 'max-polls' | 'timeout';
+  durationMs: number;
+}
+
 export interface ProtocolConfig {
   host: string;
   port: number;
@@ -120,6 +139,12 @@ export interface ProtocolConfig {
   sessionTraceEnabled?: boolean;
   sessionTraceDir?: string;
   logRawFrameData?: boolean;
+  strictPaintValidation?: boolean;
+  renderSettleMinEmptyPolls?: number;
+  renderSettleMaxPolls?: number;
+  renderSettlePollIntervalMs?: number;
+  renderSettleHashStreak?: number;
+  renderSettleTimeoutMs?: number;
   onPaintFrame?: (frame: ProtocolPaintFrame) => void;
 }
 
@@ -157,6 +182,12 @@ export const defaultProtocolConfig: ProtocolConfig = {
   sessionTraceEnabled: false,
   sessionTraceDir: path.resolve(process.cwd(), 'data', 'protocol-trace'),
   logRawFrameData: false,
+  strictPaintValidation: true,
+  renderSettleMinEmptyPolls: 2,
+  renderSettleMaxPolls: 8,
+  renderSettlePollIntervalMs: 80,
+  renderSettleHashStreak: 0,
+  renderSettleTimeoutMs: 0,
 };
 
 export class WebVisuProtocolClient {
@@ -570,6 +601,8 @@ export class WebVisuProtocolClient {
     const resp = await this.sendRaw(requestBuf);
     let paintData = this.handlePaintResponse(resp);
     const allCommandData: Uint8Array[] = [paintData.commands];
+    let declaredCommandCount = paintData.commandCount;
+    let responseCount = 1;
 
     // Handle continuations
     while (paintData.continuation > 0) {
@@ -578,6 +611,8 @@ export class WebVisuProtocolClient {
       );
       paintData = this.handlePaintResponse(contResp);
       allCommandData.push(paintData.commands);
+      declaredCommandCount += paintData.commandCount;
+      responseCount++;
     }
 
     // Concatenate all command data
@@ -590,7 +625,98 @@ export class WebVisuProtocolClient {
     }
 
     const allCommands = parsePaintCommands(combined);
+    this.validateCollectedPaintCommands(combined, allCommands, declaredCommandCount, responseCount);
     return { paintData, allCommands };
+  }
+
+  async waitForRenderSettled(options: RenderSettleOptions = {}): Promise<RenderSettleResult> {
+    this.ensureConnected();
+
+    const reason = options.reason ?? 'unspecified';
+    const minEmptyPolls = Math.max(1, options.minEmptyPolls ?? this.config.renderSettleMinEmptyPolls ?? 2);
+    const maxPolls = Math.max(minEmptyPolls, options.maxPolls ?? this.config.renderSettleMaxPolls ?? 8);
+    const pollIntervalMs = Math.max(0, options.pollIntervalMs ?? this.config.renderSettlePollIntervalMs ?? 80);
+    const hashTarget = Math.max(0, options.hashStreak ?? this.config.renderSettleHashStreak ?? 0);
+    const timeoutMs = Math.max(0, options.timeoutMs ?? this.config.renderSettleTimeoutMs ?? 0);
+    const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
+
+    const commands: PaintCommand[] = [];
+    let polls = 0;
+    let emptyStreak = 0;
+    let hashStreak = 0;
+    let settledBy: RenderSettleResult['settledBy'] = 'max-polls';
+    let previousHash: string | null = null;
+    const startedAt = Date.now();
+
+    while (polls < maxPolls && Date.now() <= deadline) {
+      polls++;
+      const polledCommands = await this.heartbeatAndCollect();
+      commands.push(...polledCommands);
+
+      if (polledCommands.length === 0) {
+        emptyStreak++;
+        hashStreak = 0;
+        previousHash = null;
+      } else {
+        emptyStreak = 0;
+        if (hashTarget > 0) {
+          const hash = this.hashCommandStream(polledCommands);
+          hashStreak = previousHash === hash ? hashStreak + 1 : 1;
+          previousHash = hash;
+        }
+      }
+
+      if (emptyStreak >= minEmptyPolls) {
+        settledBy = 'empty-streak';
+        break;
+      }
+      if (hashTarget > 0 && hashStreak >= hashTarget) {
+        settledBy = 'hash-streak';
+        break;
+      }
+
+      if (polls < maxPolls) {
+        const remaining = deadline - Date.now();
+        if (remaining > 0 && pollIntervalMs > 0) {
+          await this.delay(Math.min(pollIntervalMs, remaining));
+        }
+      }
+    }
+
+    if (Date.now() > deadline && settledBy !== 'empty-streak' && settledBy !== 'hash-streak') {
+      settledBy = 'timeout';
+    }
+
+    const result: RenderSettleResult = {
+      commands,
+      polls,
+      emptyStreak,
+      hashStreak,
+      settledBy,
+      durationMs: Date.now() - startedAt,
+    };
+
+    const logPayload = {
+      reason,
+      polls: result.polls,
+      emptyStreak: result.emptyStreak,
+      hashStreak: result.hashStreak,
+      settledBy: result.settledBy,
+      durationMs: result.durationMs,
+      commandCount: commands.length,
+      minEmptyPolls,
+      maxPolls,
+      timeoutMs,
+      hashTarget,
+    };
+
+    if (settledBy === 'empty-streak' || settledBy === 'hash-streak') {
+      logger.debug(logPayload, 'Render settle converged');
+    } else {
+      logger.warn(logPayload, 'Render settle did not converge before limits');
+    }
+
+    return result;
   }
 
   isConnected(): boolean {
@@ -638,45 +764,121 @@ export class WebVisuProtocolClient {
     return buf.toString('latin1').replace(/\x00+$/g, '');
   }
 
+  private hashCommandStream(commands: PaintCommand[]): string {
+    const hash = createHash('sha1');
+    const header = Buffer.allocUnsafe(8);
+    for (const cmd of commands) {
+      header.writeUInt32LE(cmd.size >>> 0, 0);
+      header.writeUInt32LE(cmd.id >>> 0, 4);
+      hash.update(header);
+      hash.update(cmd.data);
+    }
+    return hash.digest('hex');
+  }
+
+  private validateCollectedPaintCommands(
+    rawData: Uint8Array,
+    commands: PaintCommand[],
+    declaredCommandCount: number,
+    responseCount: number,
+  ): void {
+    const integrity = this.inspectCommandStream(rawData);
+    const countMismatch = declaredCommandCount > 0 && commands.length !== declaredCommandCount;
+    const hasStructuralIssue = integrity.invalidOffset !== null || integrity.trailingBytes > 0;
+
+    if (!countMismatch && !hasStructuralIssue) {
+      return;
+    }
+
+    const details = {
+      declaredCommandCount,
+      parsedCommandCount: commands.length,
+      responseCount,
+      rawByteLength: rawData.length,
+      trailingBytes: integrity.trailingBytes,
+      invalidOffset: integrity.invalidOffset,
+      invalidReason: integrity.invalidReason ?? undefined,
+    };
+
+    if (countMismatch) {
+      logger.warn(details, 'Paint command count mismatch between headers and parsed stream');
+    }
+
+    if (hasStructuralIssue) {
+      const message = 'Paint command stream ended with invalid or truncated payload';
+      if (this.config.strictPaintValidation === false) {
+        logger.warn(details, message);
+      } else {
+        throw new Error(`${message}: ${JSON.stringify(details)}`);
+      }
+    }
+  }
+
+  private inspectCommandStream(data: Uint8Array): {
+    trailingBytes: number;
+    invalidOffset: number | null;
+    invalidReason: 'size-too-small' | 'truncated-command' | null;
+  } {
+    if (data.length === 0) {
+      return { trailingBytes: 0, invalidOffset: null, invalidReason: null };
+    }
+
+    const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let offset = 0;
+
+    while ((offset + 8) <= data.length) {
+      const size = dv.getUint32(offset, true);
+      if (size < 8) {
+        return {
+          trailingBytes: data.length - offset,
+          invalidOffset: offset,
+          invalidReason: 'size-too-small',
+        };
+      }
+
+      if ((offset + size) > data.length) {
+        return {
+          trailingBytes: data.length - offset,
+          invalidOffset: offset,
+          invalidReason: 'truncated-command',
+        };
+      }
+
+      offset += size;
+    }
+
+    const trailingBytes = data.length - offset;
+    return {
+      trailingBytes,
+      invalidOffset: trailingBytes > 0 ? offset : null,
+      invalidReason: trailingBytes > 0 ? 'truncated-command' : null,
+    };
+  }
+
   private getPaintCommandName(commandId: number): string {
     const map: Record<number, string> = {
-      0: 'Noop',
-      2: 'DrawPolygon',
-      4: 'SetFillColor',
-      5: 'SetPenStyle',
-      6: 'SetFont',
-      7: 'ClearRect',
-      8: 'SetClipRect',
-      9: 'RestoreClipRect',
-      18: 'SetDrawMode',
-      19: 'DrawImage',
-      23: 'Fill3DRect',
+      0: 'NoOpPaintCommand',
       24: 'SetCursorStyle',
-      37: 'InitVisualization',
-      42: 'TouchHandlingFlags',
-      43: 'TouchRectangles',
-      45: 'DrawPrimitive',
-      46: 'DrawText',
       47: 'DrawTextUtf16',
-      48: 'Set3DStyle',
-      66: 'SetRenderParameter',
-      72: 'CreateElement',
-      73: 'UpdateElement',
-      81: 'SetTransform',
-      93: 'ClearRectAndClip',
+      48: 'AreaGradientStyle',
+      73: 'SetCornerRadius',
     };
-    return map[commandId] ?? 'Cmd';
+    return map[commandId] ?? getPaintCommandReferenceName(commandId) ?? 'Cmd';
   }
 
   private getPaintEventName(eventTag: number): string {
     const map: Record<number, string> = {
       1: 'Heartbeat',
       2: 'MouseDown',
+      8: 'MouseClick',
       4: 'MouseUp',
       16: 'MouseMove',
-      128: 'KeyDown',
-      256: 'KeyUp',
-      257: 'KeyPress',
+      32: 'MouseDblClick',
+      64: 'MouseWheel',
+      256: 'KeyDown',
+      512: 'KeyUp',
+      1024: 'KeyPress',
+      2048: 'MouseEnter',
       516: 'ViewportInfo',
       4096: 'MouseOut',
       1048576: 'Control',
@@ -703,7 +905,7 @@ export class WebVisuProtocolClient {
       const extra = findTlvEntry(innerEntries, 2);
       const clip = findTlvEntry(innerEntries, 3);
       const scale = findTlvEntry(innerEntries, 5);
-      const packedCoordinates = eventTag === 2 || eventTag === 4 || eventTag === 16;
+      const packedCoordinates = eventTag === 2 || eventTag === 4 || eventTag === 8 || eventTag === 16 || eventTag === 32;
       const x = packedCoordinates ? ((param1 >>> 16) & 0xffff) : param1;
       const y = packedCoordinates ? (param1 & 0xffff) : param2;
 
