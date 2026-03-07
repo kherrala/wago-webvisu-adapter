@@ -174,7 +174,7 @@ export function parseGetMyIPResponse(buf: ArrayBuffer): string {
       return token.slice('IPv4:'.length).trim();
     }
   }
-  return text.replace('IPv4:', '').trim();
+  return '';
 }
 
 export function buildDeviceSession(
