@@ -154,7 +154,7 @@ export const defaultProtocolConfig: ProtocolConfig = {
   postMethodDeriveMarginMs: 20,
   deviceUsername: '',
   devicePassword: '',
-  sessionTraceEnabled: true,
+  sessionTraceEnabled: false,
   sessionTraceDir: path.resolve(process.cwd(), 'data', 'protocol-trace'),
   logRawFrameData: false,
 };

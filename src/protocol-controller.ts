@@ -350,8 +350,21 @@ export class ProtocolController implements IWebVisuController {
           this.dropdownHandleCenterY = snapshot.handleCenterY;
           latestSnapshot = snapshot;
           logger.info({ scrollAttempt, firstVisible: snapshot.firstVisible }, 'Arrow-scroll snapshot synced');
+        } else if (this.isDropdownLikelyClosed(arrowAllCmds)) {
+          // The "Ohjaus" button label appeared in the arrow-click responses,
+          // meaning the dropdown closed during scrolling. Reopen it — the PLC
+          // retains scroll position within the same session.
+          logger.warn({ scrollAttempt, lightId, delta }, 'Dropdown closed during arrow scroll (Ohjaus detected); reopening');
+          const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`arrow-scroll-reopen:${scrollAttempt}`);
+          stepCommands.push(...reopenCmds);
+          if (reopenSnapshot) {
+            latestSnapshot = reopenSnapshot;
+          } else {
+            this.dropdownFirstVisible += delta;
+          }
         } else {
-          // Trust arithmetic: each arrow click moves by 1
+          // Dropdown appears open but labels didn't form a consistent snapshot.
+          // Trust arithmetic: each arrow click moves by 1.
           this.dropdownFirstVisible += delta;
           logger.info({ scrollAttempt, firstVisible: this.dropdownFirstVisible }, 'Arrow-scroll: no snapshot, trusting arithmetic');
         }
@@ -395,32 +408,11 @@ export class ProtocolController implements IWebVisuController {
       stepCommands.push(...closeCmds);
       await this.delay(300);
 
-      // Reopen: click the dropdown arrow again.
-      const reopenAccum: PaintCommand[] = [];
-      const reopenCmds = await this.client.pressAndCollect(arrowX, arrowY);
-      reopenAccum.push(...reopenCmds);
+      // Reopen the dropdown and sync scroll state.
+      const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`drag-reopen:${scrollAttempt}`);
       stepCommands.push(...reopenCmds);
-
-      // Wait for the dropdown to fully open (5 text labels).
-      if (!this.isDropdownOpen(reopenAccum)) {
-        const reopenDeadline = Date.now() + 4000;
-        while (Date.now() < reopenDeadline) {
-          const cmds = await this.pollPaintCommands(`reopen:${scrollAttempt}`);
-          reopenAccum.push(...cmds);
-          stepCommands.push(...cmds);
-          if (this.isDropdownOpen(reopenAccum)) break;
-          const remaining = reopenDeadline - Date.now();
-          if (remaining > 0) await this.delay(Math.min(150, remaining));
-        }
-      }
-
-      // Sync actual scroll position from the freshly reopened dropdown.
-      const reopenSnapshot = this.resolveDropdownSnapshot(reopenAccum);
       if (reopenSnapshot) {
-        this.dropdownFirstVisible = reopenSnapshot.firstVisible;
-        this.dropdownHandleCenterY = reopenSnapshot.handleCenterY;
         latestSnapshot = reopenSnapshot;
-        logger.info({ scrollAttempt, firstVisible: reopenSnapshot.firstVisible, handleY: Math.round(reopenSnapshot.handleCenterY) }, 'Post-drag reopen snapshot synced');
       } else {
         this.dropdownFirstVisible = targetFirstVisible;
       }
@@ -438,8 +430,7 @@ export class ProtocolController implements IWebVisuController {
 
     // Step 4: Resolve click coordinates from the latest snapshot.
     // Use the label positions already captured from the dropdown open or
-    // post-drag reopen response. If the target label isn't in the snapshot,
-    // poll once more and combine with accumulated commands.
+    // post-drag reopen response.
     const positionInView = index - this.dropdownFirstVisible;
     const visibleItems = dropdownConfig.visibleItems;
     if (positionInView < 0 || positionInView >= visibleItems) {
@@ -449,9 +440,6 @@ export class ProtocolController implements IWebVisuController {
     let itemY: number;
     let clickSource: string;
 
-    // Try to find the target label in the latest snapshot.
-    // Do NOT send additional viewport events here — doing so while the dropdown
-    // is open can cause the PLC to close it before we click.
     const targetLabel = latestSnapshot?.labels.find(l => l.index === index) ?? null;
 
     if (targetLabel) {
@@ -1236,6 +1224,55 @@ export class ProtocolController implements IWebVisuController {
     const labels = extractTextLabels(commands);
     const normalizedTexts = new Set(labels.map(l => this.normalizeVisuText(l.text)));
     return ProtocolController.NAPIT_REQUIRED_LABELS.every(req => normalizedTexts.has(this.normalizeVisuText(req)));
+  }
+
+  /**
+   * Detect if the dropdown is likely closed by checking for the "Ohjaus"
+   * button label. This label is only visible when the dropdown is closed —
+   * the open dropdown list covers it completely.
+   */
+  private isDropdownLikelyClosed(commands: PaintCommand[]): boolean {
+    const labels = extractTextLabels(commands);
+    return labels.some(l => this.normalizeVisuText(l.text) === 'ohjaus');
+  }
+
+  /**
+   * Reopen the dropdown from a known-closed state. Clicks the dropdown
+   * arrow once to open, waits for 5 labels, and syncs scroll state.
+   * Returns the accumulated commands and resolved snapshot.
+   */
+  private async reopenDropdownFromClosed(reason: string): Promise<{
+    commands: PaintCommand[];
+    snapshot: ReturnType<ProtocolController['resolveDropdownSnapshot']>;
+  }> {
+    const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
+    const arrowY = uiCoordinates.lightSwitches.dropdownArrow.y;
+    const accum: PaintCommand[] = [];
+
+    const openCmds = await this.client.pressAndCollect(arrowX, arrowY);
+    accum.push(...openCmds);
+
+    if (!this.isDropdownOpen(accum)) {
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        const cmds = await this.pollPaintCommands(`reopen-wait:${reason}`);
+        accum.push(...cmds);
+        if (this.isDropdownOpen(accum)) break;
+        const remaining = deadline - Date.now();
+        if (remaining > 0) await this.delay(Math.min(150, remaining));
+      }
+    }
+
+    const snapshot = this.resolveDropdownSnapshot(accum);
+    if (snapshot) {
+      this.dropdownFirstVisible = snapshot.firstVisible;
+      this.dropdownHandleCenterY = snapshot.handleCenterY;
+      logger.info({ reason, firstVisible: snapshot.firstVisible }, 'Dropdown reopened and synced');
+    } else {
+      logger.warn({ reason }, 'Dropdown reopen produced no snapshot');
+    }
+
+    return { commands: accum, snapshot };
   }
 
   private isDropdownOpen(commands: PaintCommand[]): boolean {

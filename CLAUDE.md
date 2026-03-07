@@ -147,6 +147,7 @@ failure-mode diagnostics.
 | `MCP_PORT` | `3002` | MCP SSE port |
 | `HEADLESS` | `true` | Set to `false` for visible browser (Playwright only) |
 | `DB_PATH` | `./data/lights.db` | SQLite database path |
+| `PROTOCOL_SESSION_TRACE` | `false` | Enable protocol session trace logging (writes to `PROTOCOL_SESSION_TRACE_DIR`) |
 | `POLLING_ENABLED` | `true` | Enable background polling |
 | `POLL_INTERVAL_MS` | `2000` | Delay between individual light polls |
 | `POLL_CYCLE_DELAY_MS` | `30000` | Delay between full polling cycles |

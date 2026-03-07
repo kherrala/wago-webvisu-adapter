@@ -62,7 +62,7 @@ export const config = {
     postClickDelay: 0,
     postSelectDelay: 100,
     debugHttp: process.env.PROTOCOL_DEBUG_HTTP === 'true',
-    sessionTraceEnabled: process.env.PROTOCOL_SESSION_TRACE !== 'false',
+    sessionTraceEnabled: process.env.PROTOCOL_SESSION_TRACE === 'true',
     sessionTraceDir: process.env.PROTOCOL_SESSION_TRACE_DIR || '/data/protocol-trace',
     logRawFrameData: process.env.PROTOCOL_LOG_RAW_FRAME_DATA === 'true',
     debugRenderEnabled: process.env.PROTOCOL_DEBUG_RENDER === 'true',
