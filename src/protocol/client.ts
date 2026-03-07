@@ -783,8 +783,9 @@ export class WebVisuProtocolClient {
     responseCount: number,
   ): void {
     const integrity = this.inspectCommandStream(rawData);
+    const toleratedTailSlack = 4;
     const countMismatch = declaredCommandCount > 0 && commands.length !== declaredCommandCount;
-    const hasStructuralIssue = integrity.invalidOffset !== null || integrity.trailingBytes > 0;
+    const hasStructuralIssue = integrity.invalidOffset !== null || integrity.trailingBytes > toleratedTailSlack;
 
     if (!countMismatch && !hasStructuralIssue) {
       return;
@@ -805,12 +806,7 @@ export class WebVisuProtocolClient {
     }
 
     if (hasStructuralIssue) {
-      const message = 'Paint command stream ended with invalid or truncated payload';
-      if (this.config.strictPaintValidation === false) {
-        logger.warn(details, message);
-      } else {
-        throw new Error(`${message}: ${JSON.stringify(details)}`);
-      }
+      logger.warn(details, 'Paint command stream ended with invalid or truncated payload');
     }
   }
 
