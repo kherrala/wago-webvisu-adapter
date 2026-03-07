@@ -204,9 +204,33 @@ export class WebVisuProtocolClient {
 
     // Step 3: OpenConnection
     logger.info('Step 3: OpenConnection');
-    const openResp = await this.sendRaw(
-      buildOpenConnection(this.config.plcAddress, this.config.commBufferSize, this.config.useLocalHost)
+    const openRequest = buildOpenConnection(
+      this.config.plcAddress,
+      this.config.commBufferSize,
+      this.config.useLocalHost
     );
+    const openMaxAttempts = 4;
+    let openResp: ArrayBuffer | null = null;
+    for (let attempt = 1; attempt <= openMaxAttempts; attempt++) {
+      try {
+        // On flaky PLC sessions OpenConnection can intermittently return HTTP 200
+        // with empty payload. Retry with a short backoff instead of failing the
+        // full handshake immediately.
+        openResp = await this.sendRaw(openRequest);
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const retriable = this.isRetriableOpenConnectionError(message);
+        if (!retriable || attempt >= openMaxAttempts) {
+          throw error;
+        }
+        logger.warn({ attempt, openMaxAttempts, error: message }, 'OpenConnection failed, retrying');
+        await this.delay(120 * attempt);
+      }
+    }
+    if (!openResp) {
+      throw new Error('OpenConnection failed: empty response after retries');
+    }
     const connInfo = parseOpenConnectionResponse(openResp);
     this.openConnectionSessionId = connInfo.sessionId;
     logger.info(`Session established: id=${this.openConnectionSessionId}, commBuffer=${connInfo.commBufferSize}, demo=${connInfo.demoMode}, supportsPost=${connInfo.supportsPostMethod}`);
@@ -394,15 +418,16 @@ export class WebVisuProtocolClient {
     }
 
     // MouseDown
-    const downResp = await this.sendRaw(buildMouseDown(this.clientId, x, y, this.sessionId));
-    const downPaint = this.handlePaintResponse(downResp);
+    await this.sendEventAndCollect(buildMouseDown(this.clientId, x, y, this.sessionId));
 
     // Brief delay between down and up
     await this.delay(this.config.postClickDelay);
 
     // MouseUp
-    const upResp = await this.sendRaw(buildMouseUp(this.clientId, x, y, this.sessionId));
-    return this.handlePaintResponse(upResp);
+    const { paintData } = await this.sendEventAndCollect(
+      buildMouseUp(this.clientId, x, y, this.sessionId)
+    );
+    return paintData;
   }
 
   /**
@@ -438,6 +463,16 @@ export class WebVisuProtocolClient {
    * Returns combined commands from both events.
    */
   async pressAndCollect(x: number, y: number): Promise<PaintCommand[]> {
+    const detailed = await this.pressAndCollectDetailed(x, y);
+    return [...detailed.downCommands, ...detailed.upCommands];
+  }
+
+  /**
+   * Press mouseDown and mouseUp while returning the command streams separately.
+   * Needed when caller must reason about final state after mouseUp without mixing
+   * transient mouseDown-only render output.
+   */
+  async pressAndCollectDetailed(x: number, y: number): Promise<{ downCommands: PaintCommand[]; upCommands: PaintCommand[] }> {
     this.ensureConnected();
 
     // Skip mouseMove if already at the target position.
@@ -456,7 +491,7 @@ export class WebVisuProtocolClient {
     const { allCommands: upCommands } = await this.sendEventAndCollect(
       buildMouseUp(this.clientId, x, y, this.sessionId)
     );
-    return [...downCommands, ...upCommands];
+    return { downCommands, upCommands };
   }
 
   /**
@@ -488,10 +523,12 @@ export class WebVisuProtocolClient {
 
   async mouseMove(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
-    const resp = await this.sendRaw(buildMouseMove(this.clientId, x, y, this.sessionId));
+    const { paintData } = await this.sendEventAndCollect(
+      buildMouseMove(this.clientId, x, y, this.sessionId)
+    );
     this.lastMouseX = x;
     this.lastMouseY = y;
-    return this.handlePaintResponse(resp);
+    return paintData;
   }
 
   /**
@@ -510,14 +547,18 @@ export class WebVisuProtocolClient {
 
   async mouseDown(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
-    const resp = await this.sendRaw(buildMouseDown(this.clientId, x, y, this.sessionId));
-    return this.handlePaintResponse(resp);
+    const { paintData } = await this.sendEventAndCollect(
+      buildMouseDown(this.clientId, x, y, this.sessionId)
+    );
+    return paintData;
   }
 
   async mouseUp(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
-    const resp = await this.sendRaw(buildMouseUp(this.clientId, x, y, this.sessionId));
-    return this.handlePaintResponse(resp);
+    const { paintData } = await this.sendEventAndCollect(
+      buildMouseUp(this.clientId, x, y, this.sessionId)
+    );
+    return paintData;
   }
 
   /**
@@ -611,9 +652,11 @@ export class WebVisuProtocolClient {
       19: 'DrawImage',
       23: 'Fill3DRect',
       37: 'InitVisualization',
-      42: 'TouchRectangles',
+      42: 'TouchHandlingFlags',
+      43: 'TouchRectangles',
       45: 'DrawPrimitive',
       46: 'DrawText',
+      47: 'DrawTextUtf16',
       48: 'Set3DStyle',
       66: 'SetRenderParameter',
       72: 'CreateElement',
@@ -1268,6 +1311,34 @@ export class WebVisuProtocolClient {
       .join('; ');
   }
 
+  private decodeResponsePayloadHeader(rawHeader: string | string[] | undefined): Uint8Array | null {
+    if (!rawHeader) {
+      return null;
+    }
+
+    const headerValue = Array.isArray(rawHeader)
+      ? rawHeader.find((value) => value && value.trim().length > 0)
+      : rawHeader;
+    if (!headerValue) {
+      return null;
+    }
+
+    try {
+      const decoded = Buffer.from(headerValue.trim(), 'base64');
+      return decoded.length > 0 ? decoded : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private isRetriableOpenConnectionError(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return normalized.includes('response length 0') ||
+      normalized.includes('socket hang up') ||
+      normalized.includes('econnreset') ||
+      normalized.includes('timed out');
+  }
+
   private async measureRequestMs(data: ArrayBuffer, useHeaderPayload: boolean): Promise<number> {
     const start = Date.now();
     await this.sendRaw(data, {
@@ -1336,7 +1407,13 @@ export class WebVisuProtocolClient {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => {
-          const responseBuf = Buffer.concat(chunks);
+          let responseBuf = Buffer.concat(chunks);
+          if (responseBuf.byteLength === 0) {
+            const headerPayload = this.decodeResponsePayloadHeader(res.headers['3s-repl-content']);
+            if (headerPayload) {
+              responseBuf = Buffer.from(headerPayload);
+            }
+          }
           this.logFrame('response', responseBuf, {
             status: res.statusCode ?? 'unknown',
             statusText: res.statusMessage ?? '',

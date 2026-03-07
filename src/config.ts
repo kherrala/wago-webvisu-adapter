@@ -59,7 +59,7 @@ export const config = {
     statusPollDelayMs: parseInt(process.env.PROTOCOL_STATUS_POLL_DELAY_MS || '0', 10),
     statusMaxAttempts: parseInt(process.env.PROTOCOL_STATUS_MAX_ATTEMPTS || '3', 10),
     reconnectDelay: 5000,
-    postClickDelay: 0,
+    postClickDelay: 60,
     postSelectDelay: 100,
     debugHttp: process.env.PROTOCOL_DEBUG_HTTP === 'true',
     sessionTraceEnabled: process.env.PROTOCOL_SESSION_TRACE === 'true',

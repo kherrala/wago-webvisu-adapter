@@ -7,6 +7,10 @@ export const CMD_SET_FILL_COLOR = 4;
 export const CMD_FILL_3D_RECT = 23;
 export const CMD_CLEAR_RECT = 7;
 export const CMD_DRAW_IMAGE = 19;
+export const CMD_TOUCH_HANDLING_FLAGS = 42;
+export const CMD_TOUCH_RECTANGLES = 43;
+export const CMD_DRAW_TEXT = 46;
+export const CMD_DRAW_TEXT_UTF16 = 47;
 
 export interface PaintCommand {
   id: number;
@@ -53,6 +57,45 @@ export interface TextLabelCommand {
   text: string;
 }
 
+export interface TouchHandlingFlagsCommand {
+  commandId: number;
+  flags: number;
+  touchHandlingActive: boolean;
+  semiTransparencyActive: boolean;
+  clipFeedbackEnabled: boolean;
+}
+
+export interface TouchRectSubTarget {
+  id: number;
+  layerId: number;
+  lockScrollX: boolean;
+  lockScrollY: boolean;
+  offsetX: number;
+  offsetY: number;
+}
+
+export interface TouchRectangleCommand {
+  commandId: number;
+  touchId: number;
+  flags: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  scrollLimits?: { minX: number; minY: number; maxX: number; maxY: number };
+  zoomLimits?: { min: number; max: number };
+  subTargets: TouchRectSubTarget[];
+}
+
+function isTouchRectanglesCommand(cmd: PaintCommand): boolean {
+  if (cmd.id === CMD_TOUCH_RECTANGLES) {
+    return true;
+  }
+  // Some WebVisu variants emit touch rectangles on command 42 instead of 43.
+  // Command 42 with 4-byte payload is handled as touch flags.
+  return cmd.id === CMD_TOUCH_HANDLING_FLAGS && cmd.data.length > 4;
+}
+
 export function parsePaintCommands(data: Uint8Array): PaintCommand[] {
   const commands: PaintCommand[] = [];
   const reader = new BinaryReader(data);
@@ -79,6 +122,14 @@ function decodeLatin1(bytes: Uint8Array): string {
     out += String.fromCharCode(bytes[i]);
   }
   return out;
+}
+
+function decodeUtf16Le(bytes: Uint8Array): string {
+  if (bytes.length < 2) {
+    return '';
+  }
+  const alignedLength = bytes.length - (bytes.length % 2);
+  return Buffer.from(bytes.subarray(0, alignedLength)).toString('utf16le');
 }
 
 export function extractColorCommands(commands: PaintCommand[]): ColorCommand[] {
@@ -220,7 +271,7 @@ export function extractDrawImages(commands: PaintCommand[]): ImageDrawCommand[] 
 }
 
 function parseTextLabelCommand(cmd: PaintCommand): TextLabelCommand | null {
-  if (cmd.id !== 46 || cmd.data.length < 14) return null;
+  if ((cmd.id !== CMD_DRAW_TEXT && cmd.id !== CMD_DRAW_TEXT_UTF16) || cmd.data.length < 14) return null;
   const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
   const left = dv.getInt16(0, true);
   const top = dv.getInt16(2, true);
@@ -230,7 +281,8 @@ function parseTextLabelCommand(cmd: PaintCommand): TextLabelCommand | null {
   const textLen = dv.getUint16(12, true);
   if (cmd.data.length < 14 + textLen) return null;
   const textBytes = cmd.data.subarray(14, 14 + textLen);
-  const text = decodeLatin1(textBytes).replace(/\x00+$/g, '');
+  const text = (cmd.id === CMD_DRAW_TEXT_UTF16 ? decodeUtf16Le(textBytes) : decodeLatin1(textBytes))
+    .replace(/\x00+$/g, '');
   return {
     commandId: cmd.id,
     left,
@@ -250,6 +302,150 @@ export function extractTextLabels(commands: PaintCommand[]): TextLabelCommand[] 
     labels.push(parsed);
   }
   return labels;
+}
+
+export function extractTouchHandlingFlags(commands: PaintCommand[]): TouchHandlingFlagsCommand[] {
+  const flags: TouchHandlingFlagsCommand[] = [];
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_TOUCH_HANDLING_FLAGS || cmd.data.length !== 4) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    const rawFlags = dv.getUint32(0, true);
+    flags.push({
+      commandId: cmd.id,
+      flags: rawFlags,
+      touchHandlingActive: (rawFlags & 0x1) !== 0,
+      semiTransparencyActive: (rawFlags & 0x2) !== 0,
+      clipFeedbackEnabled: (rawFlags & 0x4) !== 0,
+    });
+  }
+  return flags;
+}
+
+function normalizeTouchRectFromPoints(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number
+): { left: number; top: number; right: number; bottom: number } {
+  const left = Math.min(x1, x2);
+  const top = Math.min(y1, y2);
+  // webvisu.js decrements bottom-right by one after rectangle normalization.
+  const right = Math.max(left, Math.max(x1, x2) - 1);
+  const bottom = Math.max(top, Math.max(y1, y2) - 1);
+  return { left, top, right, bottom };
+}
+
+function parseTouchRectanglesCommand(cmd: PaintCommand): TouchRectangleCommand[] {
+  if (!isTouchRectanglesCommand(cmd) || cmd.data.length < 12) {
+    return [];
+  }
+
+  const reader = new BinaryReader(cmd.data);
+  const touchRects: TouchRectangleCommand[] = [];
+  let currentTouchRect: TouchRectangleCommand | null = null;
+
+  while (reader.remaining >= 8) {
+    const descriptor = reader.readUint32();
+
+    if ((descriptor & 0x80000000) !== 0) {
+      const touchId = reader.readUint32();
+      if (reader.remaining < 8) break;
+
+      const x1 = reader.readInt16();
+      const y1 = reader.readInt16();
+      const x2 = reader.readInt16();
+      const y2 = reader.readInt16();
+      const rect = normalizeTouchRectFromPoints(x1, y1, x2, y2);
+
+      currentTouchRect = {
+        commandId: cmd.id,
+        touchId,
+        flags: descriptor & 0x7fffffff,
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        subTargets: [],
+      };
+      touchRects.push(currentTouchRect);
+      continue;
+    }
+
+    const payloadLen = descriptor & 0xffff;
+    const propertyType = (descriptor & 0x7fffffff) >>> 16;
+    if (reader.remaining < payloadLen) {
+      break;
+    }
+
+    const payload = new Uint8Array(reader.readBytes(payloadLen));
+    if (!currentTouchRect) {
+      continue;
+    }
+
+    const payloadReader = new BinaryReader(payload);
+    switch (propertyType) {
+      case 3: {
+        if (payloadReader.remaining < 16) break;
+        const dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+        const minX = dv.getInt32(0, true);
+        const minY = dv.getInt32(4, true);
+        const maxX = dv.getInt32(8, true);
+        const maxY = dv.getInt32(12, true);
+        currentTouchRect.scrollLimits = { minX, minY, maxX, maxY };
+        break;
+      }
+      case 4: {
+        if (payloadReader.remaining < 8) break;
+        const dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+        currentTouchRect.zoomLimits = {
+          min: dv.getFloat32(0, true),
+          max: dv.getFloat32(4, true),
+        };
+        break;
+      }
+      case 6: {
+        if (payloadReader.remaining < 10) break;
+        const id = payloadReader.readUint16();
+        const layerId = payloadReader.readUint16();
+        const lockScrollX = payloadReader.readUint8() !== 0;
+        const lockScrollY = payloadReader.readUint8() !== 0;
+        const offsetX = payloadReader.readUint16();
+        const offsetY = payloadReader.readUint16();
+        currentTouchRect.subTargets.push({
+          id,
+          layerId,
+          lockScrollX,
+          lockScrollY,
+          offsetX,
+          offsetY,
+        });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return touchRects;
+}
+
+export function extractTouchRectangles(commands: PaintCommand[]): TouchRectangleCommand[] {
+  const touchRects: TouchRectangleCommand[] = [];
+  for (const cmd of commands) {
+    if (!isTouchRectanglesCommand(cmd)) continue;
+    touchRects.push(...parseTouchRectanglesCommand(cmd));
+  }
+  return touchRects;
+}
+
+export function extractLatestTouchRectangles(commands: PaintCommand[]): TouchRectangleCommand[] {
+  for (let i = commands.length - 1; i >= 0; i--) {
+    const cmd = commands[i];
+    if (!isTouchRectanglesCommand(cmd)) continue;
+    const parsed = parseTouchRectanglesCommand(cmd);
+    if (parsed.length > 0) return parsed;
+  }
+  return [];
 }
 
 function inferStatusFromImageId(imageId: string): boolean | null {

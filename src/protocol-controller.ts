@@ -19,7 +19,9 @@ import { buildViewportEvent } from './protocol/messages';
 import {
   PaintCommand,
   ImageDrawCommand,
+  TouchRectangleCommand,
   extractDrawImages,
+  extractLatestTouchRectangles,
   extractTextLabels,
 } from './protocol/paint-commands';
 import { ProtocolDebugRenderer } from './protocol/debug-renderer';
@@ -30,6 +32,54 @@ const logger = pino({ name: 'protocol-controller' });
 const LAMP_IMAGE_OFF = '__visualizationstyle.element-lamp-lamp1-yellow-off';
 const LAMP_IMAGE_ON = '__visualizationstyle.element-lamp-lamp1-yellow-on';
 
+type DropdownSnapshot = {
+  firstVisible: number;
+  handleCenterY: number;
+  labels: Array<{ text: string; index: number; top: number; bottom: number; row: number }>;
+};
+
+type DropdownSelectionResult = {
+  commands: PaintCommand[];
+  headerLabel: string | null;
+  strategy: 'press-primary' | 'press-fallback';
+};
+
+type DropdownSnapshotBounds = {
+  minFirstVisible: number;
+  maxFirstVisible: number;
+};
+
+class DropdownHeaderMismatchError extends Error {
+  readonly lightId: string;
+  readonly index: number;
+  readonly expectedPlcLabel: string;
+  readonly expectedName: string;
+  readonly actualHeaderLabel: string | null;
+  readonly mismatchKind: 'missing' | 'mismatch';
+
+  constructor(params: {
+    lightId: string;
+    index: number;
+    expectedPlcLabel: string;
+    expectedName: string;
+    actualHeaderLabel: string | null;
+    mismatchKind: 'missing' | 'mismatch';
+  }) {
+    const { lightId, index, expectedPlcLabel, expectedName, actualHeaderLabel, mismatchKind } = params;
+    const message = mismatchKind === 'missing'
+      ? `Header verification failed: header text missing for light=${lightId}, index=${index}, expected="${expectedPlcLabel}" or "${expectedName}"`
+      : `Header verification failed: expected="${expectedPlcLabel}" or "${expectedName}", got="${actualHeaderLabel}", light=${lightId}, index=${index}`;
+    super(message);
+    this.name = 'DropdownHeaderMismatchError';
+    this.lightId = lightId;
+    this.index = index;
+    this.expectedPlcLabel = expectedPlcLabel;
+    this.expectedName = expectedName;
+    this.actualHeaderLabel = actualHeaderLabel;
+    this.mismatchKind = mismatchKind;
+  }
+}
+
 export class ProtocolController implements IWebVisuController {
   private static readonly MIN_INITIAL_RENDER_TIMEOUT_MS = 3500;
   private static readonly DEFAULT_INITIAL_RENDER_TIMEOUT_MS = 7000;
@@ -37,6 +87,8 @@ export class ProtocolController implements IWebVisuController {
   private static readonly DEFAULT_INITIAL_RENDER_POLL_INTERVAL_MS = 200;
   private static readonly RECONNECT_EMPTY_THRESHOLD = 10;
   private static readonly RECONNECT_COOLDOWN_MS = 30_000;
+  private static readonly DROPDOWN_SNAPSHOT_WINDOW_COMMANDS = 240;
+  private static readonly DROPDOWN_CLOSED_SIGNAL_STREAK = 2;
 
   private client: WebVisuProtocolClient;
   private debugRenderer: ProtocolDebugRenderer | null = null;
@@ -210,13 +262,41 @@ export class ProtocolController implements IWebVisuController {
 
     const maxAttempts = config.protocol?.maxSelectionAttempts ?? 5;
     let lastError: Error | null = null;
+    let previousMismatchKey: string | null = null;
+    let mismatchStreak = 0;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await this.doSelectLightSwitchOnce(lightId, index);
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        logger.warn({ err: lastError, lightId, attempt, maxAttempts }, 'Selection attempt failed, retrying without reconnect');
+        let triggeredReconnect = false;
+        if (lastError instanceof DropdownHeaderMismatchError) {
+          const currentMismatchKey = lastError.actualHeaderLabel
+            ? this.normalizeVisuText(lastError.actualHeaderLabel)
+            : '__missing-header__';
+          if (currentMismatchKey === previousMismatchKey) {
+            mismatchStreak++;
+          } else {
+            previousMismatchKey = currentMismatchKey;
+            mismatchStreak = 1;
+          }
+
+          if (mismatchStreak >= 2 && attempt < maxAttempts) {
+            await this.forceDropdownResync(`header-mismatch-streak:${lightId}:${attempt}`);
+          }
+          if (mismatchStreak >= 3 && attempt < maxAttempts) {
+            await this.doReconnect(`selection-repeated-header-mismatch:${lightId}`);
+            triggeredReconnect = true;
+            mismatchStreak = 0;
+            previousMismatchKey = null;
+          }
+        } else {
+          mismatchStreak = 0;
+          previousMismatchKey = null;
+        }
+
+        logger.warn({ err: lastError, lightId, attempt, maxAttempts, triggeredReconnect }, 'Selection attempt failed, retrying');
         // Reset dropdown state so the next attempt discovers the scroll
         // position from paint data rather than using stale tracked state.
         this.resetDropdownState();
@@ -228,6 +308,7 @@ export class ProtocolController implements IWebVisuController {
 
   private async doSelectLightSwitchOnce(lightId: string, index: number): Promise<{ allCommands: PaintCommand[]; postSelectionCommands: PaintCommand[] }> {
     logger.info(`Selecting light switch: ${lightId} (index: ${index})`);
+    await this.ensureDropdownClosed(`select-start:${lightId}`);
 
     // Step 1: Open dropdown with verification.
     // The dropdown opens on mouseDown. pressAndCollect captures mouseDown + mouseUp responses.
@@ -252,7 +333,8 @@ export class ProtocolController implements IWebVisuController {
 
     for (let openAttempt = 1; openAttempt <= maxOpenAttempts; openAttempt++) {
       attemptCommands = [];
-      const clickCommands = await this.client.pressAndCollect(arrowX, arrowY);
+      const { downCommands, upCommands } = await this.client.pressAndCollectDetailed(arrowX, arrowY);
+      const clickCommands = [...downCommands, ...upCommands];
       attemptCommands.push(...clickCommands);
       allDropdownCommands.push(...clickCommands);
       logger.info({
@@ -261,8 +343,10 @@ export class ProtocolController implements IWebVisuController {
         labelCount: extractTextLabels(clickCommands).length,
       }, 'Dropdown open: pressAndCollect response');
 
-      if (this.isDropdownOpen(attemptCommands)) {
+      const settledCommands: PaintCommand[] = [...upCommands];
+      if (this.didPressLeaveDropdownOpen(downCommands, settledCommands)) {
         dropdownOpened = true;
+        attemptCommands = [...downCommands, ...settledCommands];
         break;
       }
 
@@ -274,9 +358,10 @@ export class ProtocolController implements IWebVisuController {
       while (Date.now() < deadline) {
         poll++;
         const cmds = await this.pollPaintCommands(`dropdown-open-verify:${openAttempt}:${poll}:${lightId}`);
+        settledCommands.push(...cmds);
         attemptCommands.push(...cmds);
         allDropdownCommands.push(...cmds);
-        if (this.isDropdownOpen(attemptCommands)) {
+        if (this.didPressLeaveDropdownOpen(downCommands, settledCommands)) {
           dropdownOpened = true;
           break;
         }
@@ -290,8 +375,8 @@ export class ProtocolController implements IWebVisuController {
 
       // Dropdown didn't open — click arrow again to close (in case it partially opened), then retry.
       if (openAttempt < maxOpenAttempts) {
-        logger.warn({ lightId, openAttempt }, 'Dropdown not verified as open; closing and retrying');
-        await this.client.pressAndCollect(arrowX, arrowY);
+        logger.warn({ lightId, openAttempt }, 'Dropdown not verified as open after final-state checks; resetting and retrying');
+        await this.ensureDropdownClosed(`open-retry:${lightId}:${openAttempt}`);
       }
     }
 
@@ -299,11 +384,25 @@ export class ProtocolController implements IWebVisuController {
       throw new Error(`Dropdown failed to open after ${maxOpenAttempts} attempts for light=${lightId}`);
     }
 
+    const openSettle = await this.waitForDropdownSnapshot(
+      attemptCommands,
+      `open-settle:${lightId}`,
+      1600,
+    );
+    if (openSettle.commands.length > 0) {
+      attemptCommands.push(...openSettle.commands);
+      allDropdownCommands.push(...openSettle.commands);
+    }
+    if (openSettle.closedDetected && !openSettle.snapshot) {
+      throw new Error(`Dropdown closed during open settle for light=${lightId}`);
+    }
+
     // Step 2: Dropdown is open — sync scroll state from this attempt's commands.
     // All commands within one attempt share the same scroll position, so
     // accumulated data is safe for resolving the snapshot.
     this.syncDropdownStateFromCommands(attemptCommands, 'on-open');
     let latestSnapshot = this.resolveDropdownSnapshot(attemptCommands);
+    let latestSnapshotCommands: PaintCommand[] = [...attemptCommands];
     logger.info({
       hasSnapshot: !!latestSnapshot,
       firstVisible: latestSnapshot?.firstVisible,
@@ -320,22 +419,29 @@ export class ProtocolController implements IWebVisuController {
     // 3b: Scroll loop — arrow clicks for small deltas, drag for large ones.
     const ARROW_THRESHOLD = 5;
     const dragStartHoldMs = config.protocol?.dragStartHoldMs ?? 60;
+    const dragStepDelayMs = Math.max(0, config.protocol?.dragStepDelayMs ?? 45);
+    const dragEndHoldMs = Math.max(0, config.protocol?.dragEndHoldMs ?? 50);
     const maxScrollAttempts = 6;
 
     for (let scrollAttempt = 0; scrollAttempt < maxScrollAttempts && !this.isDropdownIndexVisible(index); scrollAttempt++) {
       const delta = targetFirstVisible - this.dropdownFirstVisible;
       const absDelta = Math.abs(delta);
+      const scrollStartFirstVisible = this.dropdownFirstVisible;
 
-      if (absDelta <= ARROW_THRESHOLD) {
-        // Arrow-click path: click the up or down arrow button |delta| times.
-        // Each click scrolls by exactly 1 item. Works reliably for both
-        // forward and backward scrolling without needing close/reopen.
-        const arrowBtn = delta > 0 ? scrollbarConfig.arrowDown : scrollbarConfig.arrowUp;
+      const canUseArrowPath = absDelta <= ARROW_THRESHOLD && delta !== 0;
+      if (canUseArrowPath) {
+        // Arrow-click path for both short forward and backward moves.
+        // Up-arrow Y was calibrated lower (config.ts) to stay inside the
+        // button hitbox instead of clipping the header/list boundary.
+        const scrollDirection: 'down' | 'up' = delta > 0 ? 'down' : 'up';
+        const arrowBtn = scrollDirection === 'down'
+          ? scrollbarConfig.arrowDown
+          : scrollbarConfig.arrowUp;
         const arrowAllCmds: PaintCommand[] = [];
 
         logger.info({
           lightId, index, scrollAttempt, delta, absDelta,
-          direction: delta > 0 ? 'down' : 'up',
+          direction: scrollDirection,
           arrowX: arrowBtn.x, arrowY: arrowBtn.y,
         }, 'Arrow-click scroll');
 
@@ -343,57 +449,112 @@ export class ProtocolController implements IWebVisuController {
           const clickCmds = await this.client.pressAndCollect(arrowBtn.x, arrowBtn.y);
           arrowAllCmds.push(...clickCmds);
           stepCommands.push(...clickCmds);
-          if (i < absDelta - 1) await this.delay(150);
+          const settleCmds = await this.pollPaintCommands(`arrow-step:${scrollAttempt}:${i}`);
+          arrowAllCmds.push(...settleCmds);
+          stepCommands.push(...settleCmds);
+          if (i < absDelta - 1) await this.delay(120);
         }
 
         // Poll for any remaining paint updates after the last arrow click.
-        await this.delay(150);
+        await this.delay(120);
         const arrowPollCmds = await this.pollPaintCommands(`arrow-scroll:${scrollAttempt}`);
         arrowAllCmds.push(...arrowPollCmds);
         stepCommands.push(...arrowPollCmds);
 
+        const arrowBounds: DropdownSnapshotBounds = {
+          minFirstVisible: Math.min(scrollStartFirstVisible, scrollStartFirstVisible + delta),
+          maxFirstVisible: Math.max(scrollStartFirstVisible, scrollStartFirstVisible + delta),
+        };
+
         // Sync state from the arrow-click responses.
-        let snapshot = this.resolveDropdownSnapshot(arrowAllCmds);
+        let snapshot = this.resolveDropdownSnapshot(this.getDropdownSnapshotWindow(arrowAllCmds));
+        if (!this.isSnapshotWithinBounds(snapshot, arrowBounds)) {
+          snapshot = null;
+        }
+        let snapshotSourceCommands: PaintCommand[] = this.getDropdownSnapshotWindow(arrowAllCmds);
         if (!snapshot) {
-          let closedDetected = this.isDropdownLikelyClosed(arrowAllCmds);
-          if (!closedDetected) {
-            const settled = await this.waitForDropdownSnapshot(
-              arrowAllCmds,
-              `arrow-scroll:${scrollAttempt}`,
-              2000,
-            );
-            arrowAllCmds.push(...settled.commands);
-            stepCommands.push(...settled.commands);
-            snapshot = settled.snapshot;
-            closedDetected = settled.closedDetected;
-          }
+          const settled = await this.waitForDropdownSnapshot(
+            arrowAllCmds,
+            `arrow-scroll:${scrollAttempt}`,
+            2000,
+            arrowBounds,
+          );
+          arrowAllCmds.push(...settled.commands);
+          stepCommands.push(...settled.commands);
+          snapshot = settled.snapshot;
+          let closedDetected = settled.closedDetected;
+          snapshotSourceCommands = this.getDropdownSnapshotWindow(arrowAllCmds);
 
           if (!snapshot && closedDetected) {
             logger.warn({ scrollAttempt, lightId, delta }, 'Dropdown closed during arrow scroll (Ohjaus detected); reopening');
             const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`arrow-scroll-reopen:${scrollAttempt}`);
             stepCommands.push(...reopenCmds);
             snapshot = reopenSnapshot;
+            if (!this.isSnapshotWithinBounds(snapshot, arrowBounds)) {
+              snapshot = null;
+            }
+            snapshotSourceCommands = this.getDropdownSnapshotWindow(reopenCmds);
             if (!snapshot) {
               const reopenSettled = await this.waitForDropdownSnapshot(
                 reopenCmds,
                 `arrow-scroll-reopen:${scrollAttempt}`,
                 2000,
+                arrowBounds,
               );
               stepCommands.push(...reopenSettled.commands);
               snapshot = reopenSettled.snapshot;
+              snapshotSourceCommands = this.getDropdownSnapshotWindow([...reopenCmds, ...reopenSettled.commands]);
             }
           }
         }
 
+        let arrowProgressed = false;
         if (snapshot) {
           this.dropdownFirstVisible = snapshot.firstVisible;
           this.dropdownHandleCenterY = snapshot.handleCenterY;
           latestSnapshot = snapshot;
+          latestSnapshotCommands = snapshotSourceCommands;
+          arrowProgressed = snapshot.firstVisible !== scrollStartFirstVisible;
           logger.info({ scrollAttempt, firstVisible: snapshot.firstVisible }, 'Arrow-scroll snapshot synced');
-        } else {
-          throw new Error(`Arrow scroll did not produce stable snapshot: light=${lightId}, index=${index}, target=${targetFirstVisible}, scrollAttempt=${scrollAttempt}`);
         }
-        continue;  // Re-check visibility at top of loop
+        if (snapshot && arrowProgressed) {
+          // Arrow scrolling can leave label rendering and click hitboxes out
+          // of sync. Force a close/reopen resync before continuing.
+          await this.delay(120);
+          const closeCmds = await this.client.pressAndCollect(arrowX, arrowY);
+          stepCommands.push(...closeCmds);
+          await this.delay(220);
+
+          const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`arrow-resync:${scrollAttempt}`);
+          stepCommands.push(...reopenCmds);
+          let syncedSnapshot = reopenSnapshot;
+          let syncedSourceCommands: PaintCommand[] = [...reopenCmds];
+          if (!syncedSnapshot) {
+            const settled = await this.waitForDropdownSnapshot(
+              reopenCmds,
+              `arrow-resync:${scrollAttempt}`,
+              2200,
+            );
+            stepCommands.push(...settled.commands);
+            syncedSnapshot = settled.snapshot;
+            syncedSourceCommands = [...reopenCmds, ...settled.commands];
+          }
+
+          if (!syncedSnapshot) {
+            throw new Error(`Arrow resync produced no stable snapshot: light=${lightId}, index=${index}, target=${targetFirstVisible}, scrollAttempt=${scrollAttempt}`);
+          }
+
+          this.dropdownFirstVisible = syncedSnapshot.firstVisible;
+          this.dropdownHandleCenterY = syncedSnapshot.handleCenterY;
+          latestSnapshot = syncedSnapshot;
+          latestSnapshotCommands = syncedSourceCommands;
+          continue;  // Re-check visibility at top of loop
+        }
+        if (snapshot && !arrowProgressed) {
+          logger.warn({ scrollAttempt, lightId, index, firstVisible: snapshot.firstVisible }, 'Arrow scroll produced no progress; falling back to drag');
+        } else {
+          logger.warn({ scrollAttempt, lightId, index, targetFirstVisible }, 'Arrow scroll did not produce stable snapshot; falling back to drag');
+        }
       }
 
       // Drag path for large deltas (both forward and backward).
@@ -411,17 +572,31 @@ export class ProtocolController implements IWebVisuController {
       await this.client.mouseDown(scrollbarX, currentHandleY);
       await this.delay(dragStartHoldMs);
 
-      const dragCmds = await this.client.mouseMoveAndCollect(scrollbarX, targetHandleY);
-      stepCommands.push(...dragCmds);
+      const dragDistance = Math.abs(targetHandleY - currentHandleY);
+      const dragSteps = Math.max(2, Math.min(12, Math.ceil(dragDistance / 12)));
+      let lastDragY = currentHandleY;
+      for (let step = 1; step <= dragSteps; step++) {
+        const interpolation = step / dragSteps;
+        const moveY = Math.round(currentHandleY + ((targetHandleY - currentHandleY) * interpolation));
+        if (moveY === lastDragY) {
+          continue;
+        }
+        const moveCmds = await this.client.mouseMoveAndCollect(scrollbarX, moveY);
+        stepCommands.push(...moveCmds);
+        lastDragY = moveY;
+        if (dragStepDelayMs > 0 && step < dragSteps) {
+          await this.delay(dragStepDelayMs);
+        }
+      }
 
-      // Let the PLC fully settle the scrollbar at the target position before
-      // releasing the mouse button. Without this delay the mouseUp can arrive
-      // before the PLC has finished processing the mouseMove.
-      await this.delay(300);
+      // Let the PLC fully settle the final move before releasing.
+      await this.delay(dragEndHoldMs);
 
       // Release the scrollbar handle.
       const dragUpCmds = await this.client.mouseUpAndCollect(scrollbarX, targetHandleY);
       stepCommands.push(...dragUpCmds);
+      const dragSettleCmds = await this.pollPaintCommands(`drag-settle:${scrollAttempt}`);
+      stepCommands.push(...dragSettleCmds);
 
       // After scrollbar drag + mouseUp, the PLC's rendered labels and click
       // targets can be out of sync. Close and reopen the dropdown to force
@@ -437,6 +612,7 @@ export class ProtocolController implements IWebVisuController {
       const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`drag-reopen:${scrollAttempt}`);
       stepCommands.push(...reopenCmds);
       let snapshotAfterReopen = reopenSnapshot;
+      let snapshotSourceCommands: PaintCommand[] = [...reopenCmds];
       if (!snapshotAfterReopen) {
         const settled = await this.waitForDropdownSnapshot(
           reopenCmds,
@@ -445,6 +621,7 @@ export class ProtocolController implements IWebVisuController {
         );
         stepCommands.push(...settled.commands);
         snapshotAfterReopen = settled.snapshot;
+        snapshotSourceCommands = [...reopenCmds, ...settled.commands];
       }
 
       if (!snapshotAfterReopen) {
@@ -453,6 +630,7 @@ export class ProtocolController implements IWebVisuController {
       this.dropdownFirstVisible = snapshotAfterReopen.firstVisible;
       this.dropdownHandleCenterY = snapshotAfterReopen.handleCenterY;
       latestSnapshot = snapshotAfterReopen;
+      latestSnapshotCommands = snapshotSourceCommands;
 
       if (this.isDropdownIndexVisible(index)) {
         logger.info({ scrollAttempt, firstVisible: this.dropdownFirstVisible, index }, 'Target visible after scroll');
@@ -465,6 +643,47 @@ export class ProtocolController implements IWebVisuController {
       throw new Error(`Scroll failed after ${maxScrollAttempts} drag attempts: light=${lightId}, index=${index}, firstVisible=${this.dropdownFirstVisible}, target=${targetFirstVisible}`);
     }
 
+    const reliableSnapshotResult = await this.waitForReliableDropdownSnapshot(
+      latestSnapshotCommands,
+      `pre-click:${lightId}`,
+      index,
+      2000,
+      undefined,
+      true,
+    );
+    stepCommands.push(...reliableSnapshotResult.commands);
+    let reliableSnapshot = reliableSnapshotResult.snapshot;
+    if (reliableSnapshotResult.closedDetected) {
+      logger.warn({ lightId, index }, 'Dropdown closed before item click; reopening once');
+      const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`pre-click-reopen:${lightId}`);
+      stepCommands.push(...reopenCmds);
+      latestSnapshotCommands = [...latestSnapshotCommands, ...reliableSnapshotResult.commands, ...reopenCmds];
+      let resolvedAfterReopen: DropdownSnapshot | null = reopenSnapshot;
+      if (!this.isSnapshotReliableForIndex(resolvedAfterReopen, index)) {
+        const settled = await this.waitForReliableDropdownSnapshot(
+          reopenCmds,
+          `pre-click-reopen:${lightId}`,
+          index,
+          2000,
+          undefined,
+          true,
+        );
+        stepCommands.push(...settled.commands);
+        latestSnapshotCommands = [...latestSnapshotCommands, ...settled.commands];
+        resolvedAfterReopen = settled.snapshot;
+      }
+      reliableSnapshot = resolvedAfterReopen;
+    } else {
+      latestSnapshotCommands = [...latestSnapshotCommands, ...reliableSnapshotResult.commands];
+    }
+
+    if (!reliableSnapshot) {
+      throw new Error(`No reliable dropdown snapshot before item click: light=${lightId}, index=${index}`);
+    }
+    latestSnapshot = reliableSnapshot;
+    this.dropdownFirstVisible = latestSnapshot.firstVisible;
+    this.dropdownHandleCenterY = latestSnapshot.handleCenterY;
+
     // Step 4: Resolve click coordinates from the latest snapshot.
     // Use the label positions already captured from the dropdown open or
     // post-drag reopen response.
@@ -473,6 +692,8 @@ export class ProtocolController implements IWebVisuController {
     if (positionInView < 0 || positionInView >= visibleItems) {
       throw new Error(`Dropdown row out of view after scroll: light=${lightId}, position=${positionInView}`);
     }
+    // Use the known-good dropdown row X from UI calibration.
+    const rowClickX = dropdownConfig.itemX;
 
     let itemY: number;
     let clickSource: string;
@@ -492,65 +713,65 @@ export class ProtocolController implements IWebVisuController {
       clickSource = 'computed-row';
     }
 
+    const touchValidatedTarget = this.resolveTouchValidatedDropdownClickY(
+      latestSnapshotCommands,
+      positionInView,
+      rowClickX,
+      itemY,
+    );
+    itemY = touchValidatedTarget.y;
+    if (touchValidatedTarget.usedTouchRectangles) {
+      clickSource = `${clickSource}+${touchValidatedTarget.source}`;
+    }
+
     logger.info({
       lightId,
       index,
       positionInView,
       clickY: itemY,
       clickSource,
+      touchRectanglesUsed: touchValidatedTarget.usedTouchRectangles,
+      touchRectanglesInRow: touchValidatedTarget.targetRowRectCount,
+      touchRectanglesTotalRows: touchValidatedTarget.totalRowRectCount,
     }, 'Selecting dropdown item');
 
-    // Step 5: Click item → mouseDown selects the item and closes the dropdown.
-    // Use mouseDownAndCollect to capture the lamp icon redraws that the PLC
-    // sends immediately on selection (these are lost with plain mouseDown).
-    // After a settle delay, mouseUp goes to the dropdown arrow (safe area) to
-    // avoid hitting Ohjaus/panel buttons.
-    const itemDownCmds = await this.client.mouseDownAndCollect(dropdownConfig.itemX, itemY);
-    const selectionSettleMs = config.protocol?.selectionSettleDelayMs ?? 200;
-    await this.delay(selectionSettleMs);
-    const itemUpCmds = await this.client.mouseUpAndCollect(arrowX, arrowY);
-
-    // Poll for the header label to appear. The PLC may need several render
-    // cycles after mouseUp to redraw the header with the selected item.
-    // Start with both mouseDown and mouseUp responses.
-    const selectCommands: PaintCommand[] = [...itemDownCmds, ...itemUpCmds];
-    const headerPollTimeoutMs = 3000;
-    const headerPollDeadline = Date.now() + headerPollTimeoutMs;
-    let headerLabel: string | null = null;
-    let headerPolls = 0;
-    // Check if the header label is already in the mouseDown response.
-    headerLabel = this.extractDropdownHeaderLabel(selectCommands);
-    while (headerLabel === null && Date.now() < headerPollDeadline) {
-      headerPolls++;
-      const cmds = await this.pollPaintCommands(`select-settle:${headerPolls}:${lightId}`);
-      selectCommands.push(...cmds);
-      headerLabel = this.extractDropdownHeaderLabel(selectCommands);
-      if (headerLabel !== null) break;
-      const remaining = headerPollDeadline - Date.now();
-      if (remaining > 0) await this.delay(Math.min(150, remaining));
-    }
-
-    // After finding the header, do one more poll to capture any remaining
-    // lamp icon redraws that arrive in a separate render cycle.
-    if (headerLabel !== null) {
-      const extraCmds = await this.pollPaintCommands(`select-extra:${lightId}`);
-      selectCommands.push(...extraCmds);
-    }
-    stepCommands.push(...selectCommands);
-
-    // Step 6: Verify the dropdown header now shows the expected item.
-    // If mismatch — opportunistically cache status for the switch that WAS selected,
-    // then throw to trigger reconnect+retry.
-    if (headerLabel !== null) {
-      const expectedLabel = lightSwitchPlcLabels[index];
-      if (this.normalizeVisuText(headerLabel) !== this.normalizeVisuText(expectedLabel)) {
-        this.opportunisticallyCacheStatus(selectCommands, headerLabel);
+    // Step 5: Selection gesture with fallback for latency-heavy runs.
+    // Primary: direct press gesture.
+    // Fallback: re-open + press gesture to recover stale hitboxes.
+    let selectionResult = await this.selectDropdownItemAndCollect(
+      lightId,
+      rowClickX,
+      itemY,
+      'press-primary',
+    );
+    stepCommands.push(...selectionResult.commands);
+    let headerLabel = selectionResult.headerLabel;
+    if (!this.isExpectedDropdownHeader(index, headerLabel)) {
+      if (headerLabel !== null) {
+        this.opportunisticallyCacheStatus(selectionResult.commands, headerLabel);
+      }
+      const fallbackResult = await this.tryFallbackDropdownSelection(
+        lightId,
+        index,
+        dropdownConfig,
+        rowClickX,
+      );
+      if (fallbackResult) {
+        stepCommands.push(...fallbackResult.preCommands);
+        stepCommands.push(...fallbackResult.selection.commands);
+        selectionResult = fallbackResult.selection;
+        headerLabel = fallbackResult.selection.headerLabel;
+        if (!this.isExpectedDropdownHeader(index, headerLabel) && headerLabel !== null) {
+          this.opportunisticallyCacheStatus(fallbackResult.selection.commands, headerLabel);
+        }
       }
     }
-    this.verifyDropdownHeader(selectCommands, lightId, index);
+
+    // Step 6: Verify the dropdown header now shows the expected item.
+    this.verifyDropdownHeader(selectionResult.commands, lightId, index);
 
     logger.info(`Light switch ${lightId} selected`);
-    return { allCommands: stepCommands, postSelectionCommands: selectCommands };
+    return { allCommands: stepCommands, postSelectionCommands: selectionResult.commands };
   }
 
   async toggleLight(lightId: string, functionNumber: 1 | 2 = 1): Promise<void> {
@@ -881,25 +1102,151 @@ export class ProtocolController implements IWebVisuController {
     return headerLabels[headerLabels.length - 1].text;
   }
 
-  private verifyDropdownHeader(commands: PaintCommand[], lightId: string, index: number): void {
+  private isExpectedDropdownHeader(index: number, headerLabel: string | null): boolean {
+    if (headerLabel === null) {
+      return false;
+    }
     const expectedPlcLabel = lightSwitchPlcLabels[index];
     const expectedName = lightSwitchNames[index];
-    const headerLabel = this.extractDropdownHeaderLabel(commands);
-    if (headerLabel === null) {
-      throw new Error(
-        `Header verification failed: header text missing for light=${lightId}, index=${index}, expected="${expectedPlcLabel}" or "${expectedName}"`
-      );
-    }
     const normalizedHeader = this.normalizeVisuText(headerLabel);
-    // Accept either the plcLabel or the system name — the PLC may show either in the header.
     const matchesPlcLabel = expectedPlcLabel && this.normalizeVisuText(expectedPlcLabel) === normalizedHeader;
     const matchesName = expectedName && this.normalizeVisuText(expectedName) === normalizedHeader;
-    if (!matchesPlcLabel && !matchesName) {
-      throw new Error(
-        `Header verification failed: expected="${expectedPlcLabel}" or "${expectedName}", got="${headerLabel}", light=${lightId}, index=${index}`
-      );
+    return !!(matchesPlcLabel || matchesName);
+  }
+
+  private buildDropdownHeaderError(lightId: string, index: number, headerLabel: string | null): DropdownHeaderMismatchError {
+    const expectedPlcLabel = lightSwitchPlcLabels[index];
+    const expectedName = lightSwitchNames[index];
+    return new DropdownHeaderMismatchError({
+      lightId,
+      index,
+      expectedPlcLabel,
+      expectedName,
+      actualHeaderLabel: headerLabel,
+      mismatchKind: headerLabel === null ? 'missing' : 'mismatch',
+    });
+  }
+
+  private verifyDropdownHeader(commands: PaintCommand[], lightId: string, index: number): void {
+    const headerLabel = this.extractDropdownHeaderLabel(commands);
+    if (!this.isExpectedDropdownHeader(index, headerLabel)) {
+      throw this.buildDropdownHeaderError(lightId, index, headerLabel);
     }
     logger.info({ lightId, index, headerText: headerLabel }, 'Header verification passed');
+  }
+
+  private async selectDropdownItemAndCollect(
+    lightId: string,
+    itemX: number,
+    itemY: number,
+    strategy: DropdownSelectionResult['strategy'],
+  ): Promise<DropdownSelectionResult> {
+    const selectCommands: PaintCommand[] = [];
+    const selectionSettleMs = Math.max(0, config.protocol?.selectionSettleDelayMs ?? 200);
+
+    const pressCmds = await this.client.mouseDownAndCollect(itemX, itemY);
+    selectCommands.push(...pressCmds);
+
+    if (strategy === 'press-primary') {
+      if (selectionSettleMs > 0) {
+        await this.delay(selectionSettleMs);
+      }
+    } else {
+      const fallbackSettleMs = Math.max(250, selectionSettleMs + 150);
+      if (fallbackSettleMs > 0) {
+        await this.delay(fallbackSettleMs);
+      }
+    }
+
+    const pollPrefix = strategy === 'press-primary' ? 'select-settle' : 'select-fallback-settle';
+    const extraPrefix = strategy === 'press-primary' ? 'select-extra' : 'select-fallback-extra';
+    const headerPollTimeoutMs = strategy === 'press-primary' ? 3000 : 3500;
+    const headerPollDeadline = Date.now() + headerPollTimeoutMs;
+    let headerLabel: string | null = this.extractDropdownHeaderLabel(selectCommands);
+    let headerPolls = 0;
+
+    while (headerLabel === null && Date.now() < headerPollDeadline) {
+      headerPolls++;
+      const cmds = await this.pollPaintCommands(`${pollPrefix}:${headerPolls}:${lightId}`);
+      selectCommands.push(...cmds);
+      headerLabel = this.extractDropdownHeaderLabel(selectCommands);
+      if (headerLabel !== null) break;
+      const remaining = headerPollDeadline - Date.now();
+      if (remaining > 0) await this.delay(Math.min(150, remaining));
+    }
+
+    if (headerLabel !== null) {
+      const extraCmds = await this.pollPaintCommands(`${extraPrefix}:${lightId}`);
+      selectCommands.push(...extraCmds);
+    }
+
+    return {
+      commands: selectCommands,
+      headerLabel,
+      strategy,
+    };
+  }
+
+  private async tryFallbackDropdownSelection(
+    lightId: string,
+    index: number,
+    dropdownConfig: typeof uiCoordinates.lightSwitches.dropdownList,
+    rowClickX: number,
+  ): Promise<{ preCommands: PaintCommand[]; selection: DropdownSelectionResult } | null> {
+    logger.warn({ lightId, index }, 'Primary selection mismatch; attempting fallback press gesture');
+
+    const preCommands: PaintCommand[] = [];
+    const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`select-fallback:${lightId}`);
+    preCommands.push(...reopenCmds);
+
+    let snapshot: DropdownSnapshot | null = reopenSnapshot;
+    if (!this.isSnapshotReliableForIndex(snapshot, index)) {
+      const settled = await this.waitForReliableDropdownSnapshot(
+        reopenCmds,
+        `select-fallback:${lightId}`,
+        index,
+        2500,
+        undefined,
+        true,
+      );
+      preCommands.push(...settled.commands);
+      if (settled.closedDetected) {
+        logger.warn({ lightId, index }, 'Fallback selection aborted: dropdown closed while waiting for reliable snapshot');
+        return null;
+      }
+      snapshot = settled.snapshot;
+    }
+
+    if (!snapshot) {
+      logger.warn({ lightId, index }, 'Fallback selection aborted: no reliable dropdown snapshot');
+      return null;
+    }
+
+    this.dropdownFirstVisible = snapshot.firstVisible;
+    this.dropdownHandleCenterY = snapshot.handleCenterY;
+    const positionInView = index - snapshot.firstVisible;
+    if (positionInView < 0 || positionInView >= dropdownConfig.visibleItems) {
+      logger.warn({ lightId, index, firstVisible: snapshot.firstVisible }, 'Fallback selection aborted: target row not visible');
+      return null;
+    }
+
+    const fallbackY = dropdownConfig.firstItemY +
+      (positionInView * dropdownConfig.itemHeight) +
+      Math.round(dropdownConfig.itemHeight / 2);
+    const touchValidatedTarget = this.resolveTouchValidatedDropdownClickY(
+      preCommands,
+      positionInView,
+      rowClickX,
+      fallbackY,
+    );
+    const selection = await this.selectDropdownItemAndCollect(
+      lightId,
+      rowClickX,
+      touchValidatedTarget.y,
+      'press-fallback',
+    );
+
+    return { preCommands, selection };
   }
 
   private opportunisticallyCacheStatus(commands: PaintCommand[], actualHeaderLabel: string): void {
@@ -943,6 +1290,28 @@ export class ProtocolController implements IWebVisuController {
     return topY + (((bottomY - topY) * firstVisible) / maxFirstVisible);
   }
 
+  private getDropdownSnapshotWindow(commands: PaintCommand[]): PaintCommand[] {
+    const maxCommands = ProtocolController.DROPDOWN_SNAPSHOT_WINDOW_COMMANDS;
+    if (commands.length <= maxCommands) {
+      return [...commands];
+    }
+    return commands.slice(-maxCommands);
+  }
+
+  private isSnapshotWithinBounds(
+    snapshot: DropdownSnapshot | null,
+    bounds?: DropdownSnapshotBounds,
+  ): snapshot is DropdownSnapshot {
+    if (!snapshot) {
+      return false;
+    }
+    if (!bounds) {
+      return true;
+    }
+    return snapshot.firstVisible >= bounds.minFirstVisible &&
+      snapshot.firstVisible <= bounds.maxFirstVisible;
+  }
+
   private resolveLightIndexFromLabel(text: string): number | null {
     const normalized = this.normalizeVisuText(text);
     if (!normalized) {
@@ -972,9 +1341,10 @@ export class ProtocolController implements IWebVisuController {
     const maxFirstVisible = this.getDropdownMaxFirstVisible();
 
     const matched = labels
-      .filter((label) => label.top >= listTop && label.bottom <= listBottom)
-      .filter((label) => label.right >= listLeft && label.left <= listRight)
-      .map((label) => {
+      .map((label, drawOrder) => ({ label, drawOrder }))
+      .filter(({ label }) => label.top >= listTop && label.bottom <= listBottom)
+      .filter(({ label }) => label.right >= listLeft && label.left <= listRight)
+      .map(({ label, drawOrder }) => {
         const index = this.resolveLightIndexFromLabel(label.text);
         if (index === null) return null;
         const centerY = Math.round((label.top + label.bottom) / 2);
@@ -988,6 +1358,7 @@ export class ProtocolController implements IWebVisuController {
           bottom: label.bottom,
           row,
           candidate: index - row,
+          drawOrder,
         };
       })
       .filter((item): item is {
@@ -997,6 +1368,7 @@ export class ProtocolController implements IWebVisuController {
         bottom: number;
         row: number;
         candidate: number;
+        drawOrder: number;
       } => !!item)
       .filter((item) => item.row >= 0 && item.row < dropdown.visibleItems)
       .filter((item) => item.candidate >= 0 && item.candidate <= maxFirstVisible)
@@ -1024,9 +1396,13 @@ export class ProtocolController implements IWebVisuController {
           candidate,
           items,
           distinctRows: rows.size,
+          latestDrawOrder: Math.max(...items.map((item) => item.drawOrder)),
         };
       })
       .sort((a, b) => {
+        // Prefer the most recently drawn candidate to avoid stale labels from
+        // earlier command chunks dominating dropdown state inference.
+        if (b.latestDrawOrder !== a.latestDrawOrder) return b.latestDrawOrder - a.latestDrawOrder;
         if (b.distinctRows !== a.distinctRows) return b.distinctRows - a.distinctRows;
         if (b.items.length !== a.items.length) return b.items.length - a.items.length;
         return Math.abs(a.candidate - this.dropdownFirstVisible) - Math.abs(b.candidate - this.dropdownFirstVisible);
@@ -1057,6 +1433,10 @@ export class ProtocolController implements IWebVisuController {
       const candidateDelta = Math.abs(item.index - expectedIndex);
       if (candidateDelta < existingDelta || (candidateDelta === existingDelta && item.top > existing.top)) {
         rowMap.set(item.row, item);
+        continue;
+      }
+      if (candidateDelta === existingDelta && item.drawOrder > existing.drawOrder) {
+        rowMap.set(item.row, item);
       }
     }
 
@@ -1074,6 +1454,96 @@ export class ProtocolController implements IWebVisuController {
       firstVisible,
       handleCenterY: this.getDropdownScrollY(firstVisible, maxFirstVisible),
       labels: labelsForSnapshot,
+    };
+  }
+
+  private resolveDropdownRowTouchRectangles(commands: PaintCommand[]): Array<{ row: number; rect: TouchRectangleCommand }> {
+    const dropdown = uiCoordinates.lightSwitches.dropdownList;
+    const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
+    const listTop = dropdown.firstItemY;
+    const listBottom = dropdown.firstItemY + (dropdown.itemHeight * dropdown.visibleItems) - 1;
+    const listLeft = Math.max(0, dropdown.itemX - 260);
+    const listRight = arrowX + 8;
+
+    const latestTouchRects = extractLatestTouchRectangles(commands);
+    if (latestTouchRects.length === 0) {
+      return [];
+    }
+
+    return latestTouchRects
+      .map((rect) => {
+        const width = Math.max(1, rect.right - rect.left + 1);
+        const height = Math.max(1, rect.bottom - rect.top + 1);
+        const centerY = Math.round((rect.top + rect.bottom) / 2);
+        const row = Math.floor((centerY - dropdown.firstItemY) / dropdown.itemHeight);
+        return { rect, width, height, row };
+      })
+      .filter((item) => item.row >= 0 && item.row < dropdown.visibleItems)
+      .filter((item) => item.rect.left <= listRight && item.rect.right >= listLeft)
+      .filter((item) => item.rect.top <= listBottom && item.rect.bottom >= listTop)
+      .filter((item) => item.width >= 160)
+      .filter((item) => item.height >= (dropdown.itemHeight - 12) && item.height <= (dropdown.itemHeight + 20))
+      .map((item) => ({ row: item.row, rect: item.rect }));
+  }
+
+  private resolveTouchValidatedDropdownClickY(
+    commands: PaintCommand[],
+    targetRow: number,
+    clickX: number,
+    fallbackY: number,
+  ): {
+    y: number;
+    source: 'touch-rect-validated' | 'touch-rect-adjusted' | 'no-touch-rect';
+    usedTouchRectangles: boolean;
+    targetRowRectCount: number;
+    totalRowRectCount: number;
+  } {
+    const rowTouchRects = this.resolveDropdownRowTouchRectangles(commands);
+    if (rowTouchRects.length === 0) {
+      return {
+        y: fallbackY,
+        source: 'no-touch-rect',
+        usedTouchRectangles: false,
+        targetRowRectCount: 0,
+        totalRowRectCount: 0,
+      };
+    }
+
+    const targetRects = rowTouchRects
+      .filter((entry) => entry.row === targetRow)
+      .filter((entry) => clickX >= entry.rect.left && clickX <= entry.rect.right);
+    if (targetRects.length === 0) {
+      throw new Error(`Touch-rect validation failed: no hittable row for targetRow=${targetRow}, x=${clickX}`);
+    }
+
+    const bestRect = targetRects
+      .map((entry) => ({
+        rect: entry.rect,
+        centerDistance: Math.abs(Math.round((entry.rect.top + entry.rect.bottom) / 2) - fallbackY),
+      }))
+      .sort((a, b) => a.centerDistance - b.centerDistance)[0].rect;
+
+    if (fallbackY >= bestRect.top && fallbackY <= bestRect.bottom) {
+      return {
+        y: fallbackY,
+        source: 'touch-rect-validated',
+        usedTouchRectangles: true,
+        targetRowRectCount: targetRects.length,
+        totalRowRectCount: rowTouchRects.length,
+      };
+    }
+
+    const innerTop = bestRect.top + 1;
+    const innerBottom = bestRect.bottom - 1;
+    const adjustedY = innerTop <= innerBottom
+      ? Math.max(innerTop, Math.min(innerBottom, fallbackY))
+      : Math.round((bestRect.top + bestRect.bottom) / 2);
+    return {
+      y: adjustedY,
+      source: 'touch-rect-adjusted',
+      usedTouchRectangles: true,
+      targetRowRectCount: targetRects.length,
+      totalRowRectCount: rowTouchRects.length,
     };
   }
 
@@ -1106,30 +1576,57 @@ export class ProtocolController implements IWebVisuController {
     seedCommands: PaintCommand[],
     reason: string,
     timeoutMs: number,
+    bounds?: DropdownSnapshotBounds,
   ): Promise<{
-    snapshot: ReturnType<ProtocolController['resolveDropdownSnapshot']>;
+    snapshot: DropdownSnapshot | null;
     commands: PaintCommand[];
     closedDetected: boolean;
   }> {
-    const accumulated = [...seedCommands];
+    let window = this.getDropdownSnapshotWindow(seedCommands);
     const additional: PaintCommand[] = [];
-    let snapshot = this.resolveDropdownSnapshot(accumulated);
+    let snapshot = this.resolveDropdownSnapshot(window);
+    if (!this.isSnapshotWithinBounds(snapshot, bounds)) {
+      snapshot = null;
+    }
     let closedDetected = false;
+    let closedSignalStreak = 0;
+    let stableFirstVisible: number | null = snapshot?.firstVisible ?? null;
+    let stableSnapshotStreak = snapshot ? 1 : 0;
 
-    if (snapshot || timeoutMs <= 0) {
+    if (timeoutMs <= 0) {
       return { snapshot, commands: additional, closedDetected };
     }
 
     const deadline = Date.now() + timeoutMs;
     let poll = 0;
-    while (Date.now() < deadline && !snapshot && !closedDetected) {
+    while (Date.now() < deadline && !closedDetected) {
       poll++;
       const cmds = await this.pollPaintCommands(`dropdown-snapshot:${reason}:${poll}`);
       additional.push(...cmds);
-      accumulated.push(...cmds);
-      snapshot = this.resolveDropdownSnapshot(accumulated);
-      closedDetected = this.isDropdownLikelyClosed(cmds);
-      if (snapshot || closedDetected) {
+      window = this.getDropdownSnapshotWindow([...window, ...cmds]);
+
+      const candidate = this.resolveDropdownSnapshot(window);
+      if (this.isSnapshotWithinBounds(candidate, bounds)) {
+        snapshot = candidate;
+        if (stableFirstVisible === candidate.firstVisible) {
+          stableSnapshotStreak++;
+        } else {
+          stableFirstVisible = candidate.firstVisible;
+          stableSnapshotStreak = 1;
+        }
+      } else {
+        stableSnapshotStreak = 0;
+      }
+
+      const closedSignal = this.isDropdownDefinitivelyClosed(cmds);
+      if (closedSignal) {
+        closedSignalStreak++;
+      } else {
+        closedSignalStreak = 0;
+      }
+      closedDetected = closedSignalStreak >= ProtocolController.DROPDOWN_CLOSED_SIGNAL_STREAK;
+
+      if (closedDetected || (snapshot !== null && stableSnapshotStreak >= 2)) {
         break;
       }
       const remaining = deadline - Date.now();
@@ -1138,6 +1635,111 @@ export class ProtocolController implements IWebVisuController {
       }
     }
 
+    return { snapshot, commands: additional, closedDetected };
+  }
+
+  private isSnapshotReliableForIndex(snapshot: DropdownSnapshot | null, index: number): snapshot is DropdownSnapshot {
+    if (!snapshot) {
+      return false;
+    }
+
+    const visibleItems = uiCoordinates.lightSwitches.dropdownList.visibleItems;
+    const targetRow = index - snapshot.firstVisible;
+    if (targetRow < 0 || targetRow >= visibleItems) {
+      return false;
+    }
+
+    const validRows = new Set<number>();
+    for (const label of snapshot.labels) {
+      if (label.index !== snapshot.firstVisible + label.row) {
+        continue;
+      }
+      validRows.add(label.row);
+    }
+
+    if (!validRows.has(targetRow)) {
+      return false;
+    }
+
+    // Some PLC renders intermittently omit one row label while the dropdown is
+    // still usable. Require only a small supporting set of consistent rows.
+    const minSupportingRows = targetRow === 0 || targetRow === visibleItems - 1 ? 2 : 3;
+    return validRows.size >= minSupportingRows;
+  }
+
+  private async waitForReliableDropdownSnapshot(
+    seedCommands: PaintCommand[],
+    reason: string,
+    index: number,
+    timeoutMs: number,
+    bounds?: DropdownSnapshotBounds,
+    requireFreshConfirmation: boolean = false,
+  ): Promise<{
+    snapshot: DropdownSnapshot | null;
+    commands: PaintCommand[];
+    closedDetected: boolean;
+  }> {
+    let window = this.getDropdownSnapshotWindow(seedCommands);
+    const additional: PaintCommand[] = [];
+    let snapshot = this.resolveDropdownSnapshot(window);
+    if (!this.isSnapshotWithinBounds(snapshot, bounds)) {
+      snapshot = null;
+    }
+    let closedDetected = false;
+    let closedSignalStreak = 0;
+    const requiredReliableStreak = requireFreshConfirmation ? 2 : 1;
+    let reliableStreak = this.isSnapshotReliableForIndex(snapshot, index) ? 1 : 0;
+    if (timeoutMs <= 0) {
+      return { snapshot, commands: additional, closedDetected };
+    }
+    if (!requireFreshConfirmation && reliableStreak >= requiredReliableStreak) {
+      return { snapshot, commands: additional, closedDetected };
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    let poll = 0;
+    while (Date.now() < deadline && !closedDetected) {
+      poll++;
+      const cmds = await this.pollPaintCommands(`dropdown-snapshot-reliable:${reason}:${poll}`);
+      additional.push(...cmds);
+      window = this.getDropdownSnapshotWindow([...window, ...cmds]);
+
+      const closedSignal = this.isDropdownDefinitivelyClosed(cmds);
+      if (closedSignal) {
+        closedSignalStreak++;
+      } else {
+        closedSignalStreak = 0;
+      }
+      closedDetected = closedSignalStreak >= ProtocolController.DROPDOWN_CLOSED_SIGNAL_STREAK;
+      const candidate = this.resolveDropdownSnapshot(window);
+      if (!this.isSnapshotWithinBounds(candidate, bounds)) {
+        const remaining = deadline - Date.now();
+        if (remaining > 0) {
+          await this.delay(Math.min(150, remaining));
+        }
+        continue;
+      }
+      const hasFreshLabelSignal = extractTextLabels(cmds).length > 0;
+      if (this.isSnapshotReliableForIndex(candidate, index)) {
+        snapshot = candidate;
+        if (!requireFreshConfirmation || hasFreshLabelSignal) {
+          reliableStreak++;
+        }
+        if (reliableStreak >= requiredReliableStreak) {
+          break;
+        }
+      } else {
+        reliableStreak = 0;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining > 0) {
+        await this.delay(Math.min(150, remaining));
+      }
+    }
+
+    if (!this.isSnapshotReliableForIndex(snapshot, index)) {
+      snapshot = null;
+    }
     return { snapshot, commands: additional, closedDetected };
   }
 
@@ -1313,6 +1915,69 @@ export class ProtocolController implements IWebVisuController {
     return labels.some(l => this.normalizeVisuText(l.text) === 'ohjaus');
   }
 
+  private isDropdownDefinitivelyClosed(commands: PaintCommand[]): boolean {
+    return this.isDropdownLikelyClosed(commands) && !this.isDropdownOpen(commands);
+  }
+
+  private didPressLeaveDropdownOpen(downCommands: PaintCommand[], settledCommands: PaintCommand[]): boolean {
+    if (this.isDropdownOpen(settledCommands)) {
+      return true;
+    }
+    if (this.isDropdownDefinitivelyClosed(settledCommands)) {
+      return false;
+    }
+    // Some PLC cycles render only on mouseDown and emit no mouseUp/poll deltas.
+    // In that case treat a mouseDown-open snapshot as open unless a later close
+    // signal appears.
+    return this.isDropdownOpen(downCommands);
+  }
+
+  private async ensureDropdownClosed(reason: string): Promise<void> {
+    const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
+    const arrowY = uiCoordinates.lightSwitches.dropdownArrow.y;
+
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const probe = await this.pollPaintCommands(`dropdown-close-probe:${reason}:${attempt}`);
+      if (!this.isDropdownOpen(probe)) {
+        return;
+      }
+
+      logger.warn({ reason, attempt }, 'Dropdown state not definitively closed; toggling arrow to restore baseline');
+      const { upCommands } = await this.client.pressAndCollectDetailed(arrowX, arrowY);
+      const settle = [...upCommands];
+      if (!this.isDropdownOpen(settle)) {
+        return;
+      }
+
+      const deadline = Date.now() + 1800;
+      let poll = 0;
+      while (Date.now() < deadline) {
+        poll++;
+        const cmds = await this.pollPaintCommands(`dropdown-close-wait:${reason}:${attempt}:${poll}`);
+        settle.push(...cmds);
+        if (!this.isDropdownOpen(cmds) || !this.isDropdownOpen(settle)) {
+          return;
+        }
+        const remaining = deadline - Date.now();
+        if (remaining > 0) {
+          await this.delay(Math.min(120, remaining));
+        }
+      }
+    }
+
+    throw new Error(`Dropdown failed to reach closed state: ${reason}`);
+  }
+
+  private async forceDropdownResync(reason: string): Promise<void> {
+    try {
+      await this.ensureDropdownClosed(`resync:${reason}`);
+      logger.warn({ reason }, 'Forced dropdown baseline resync after repeated mismatch');
+    } catch (error) {
+      logger.warn({ error, reason }, 'Dropdown resync attempt failed');
+    }
+  }
+
   /**
    * Reopen the dropdown from a known-closed state. Clicks the dropdown
    * arrow once to open, waits for 5 labels, and syncs scroll state.
@@ -1324,17 +1989,20 @@ export class ProtocolController implements IWebVisuController {
   }> {
     const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
     const arrowY = uiCoordinates.lightSwitches.dropdownArrow.y;
+    await this.ensureDropdownClosed(`reopen:${reason}`);
     const accum: PaintCommand[] = [];
 
-    const openCmds = await this.client.pressAndCollect(arrowX, arrowY);
-    accum.push(...openCmds);
+    const { downCommands, upCommands } = await this.client.pressAndCollectDetailed(arrowX, arrowY);
+    accum.push(...downCommands, ...upCommands);
+    const settled = [...upCommands];
 
-    if (!this.isDropdownOpen(accum)) {
+    if (!this.didPressLeaveDropdownOpen(downCommands, settled)) {
       const deadline = Date.now() + 4000;
       while (Date.now() < deadline) {
         const cmds = await this.pollPaintCommands(`reopen-wait:${reason}`);
+        settled.push(...cmds);
         accum.push(...cmds);
-        if (this.isDropdownOpen(accum)) break;
+        if (this.didPressLeaveDropdownOpen(downCommands, settled)) break;
         const remaining = deadline - Date.now();
         if (remaining > 0) await this.delay(Math.min(150, remaining));
       }
@@ -1366,8 +2034,13 @@ export class ProtocolController implements IWebVisuController {
       .filter(l => l.right >= listLeft && l.left <= listRight)
       .filter(l => this.resolveLightIndexFromLabel(l.text) !== null);
 
-    // A fully opened dropdown always redraws 5 dropdown item text labels.
-    return dropdownLabels.length >= 5;
+    if (this.resolveDropdownSnapshot(commands)) {
+      return true;
+    }
+
+    // In unstable sessions one row label may be temporarily missing; 3+ labels
+    // in the list area is enough to treat the dropdown as open.
+    return dropdownLabels.length >= 3;
   }
 
   private async navigateToNapitTab(): Promise<void> {

@@ -95,8 +95,8 @@ ID    Class    Description
 39    V        No-op
 40    V        No-op
 41    Ba       (unknown)
-42    sc       TouchRectangles
-43    tc       (unknown)
+42    sc       TouchHandlingFlags
+43    tc       TouchRectangles
 44    Ob       DrawPixels (point list)
 45    Qb       DrawPrimitive (two-point rect)
 46    Tb       DrawText (latin1)
@@ -416,16 +416,54 @@ Offset  Size  Field
 
 - Sets the current visualization namespace used for image ID resolution
 
-### ID 42 — TouchRectangles `sc`
+### ID 42 — TouchHandlingFlags `sc`
 
-Defines hit-test regions for interactive elements (buttons, switches).
+Global touch/render capability flags (small fixed payload).
 
 ```
-(variable-length payload — touch region definitions)
+Offset  Size  Field
+0       4     flags       (uint32 LE)
 ```
 
-- No visual effect — used internally for mouse/touch event routing
-- Defines clickable areas on the canvas
+Observed/decoded bits:
+
+- `0x01` — touch/gesture handling active
+- `0x02` — semi-transparency mode active
+- `0x04` — touch clip/feedback behavior flag (used by touch handler state)
+
+No direct visual drawing effect.
+
+### ID 43 — TouchRectangles `tc`
+
+Defines hit-test rectangles and optional scroll/zoom metadata used for event routing.
+
+Payload is a sequence of records:
+
+```
+recordHeader (uint32 LE):
+  if bit31=1: new rectangle record
+    bits0..30 = rectFlags
+    next uint32 = touchId
+    next 8 bytes = x1,y1,x2,y2 (int16 LE)
+  else: property record for the most recent rectangle
+    bits16..30 = propertyType
+    bits0..15  = propertyLength
+    next N bytes = property payload
+```
+
+Rectangle geometry:
+
+- Parsed from `(x1,y1,x2,y2)` as a normalized two-point rectangle
+- Bottom-right coordinate is decremented by 1 (`right--`, `bottom--`) in the original implementation
+
+Known property types:
+
+- `3`: scroll limits (`int32 x4`) → min/max scroll vectors
+- `4`: zoom limits (`float32 x2`) → min/max zoom
+- `5`: unknown (`uint16 x4`) — parsed but not currently used
+- `6`: sub-target mapping (`uint16,uint16,uint8,uint8,uint16,uint16`) — layer/offset metadata
+
+No direct visual drawing effect, but critical for precise hit-testing.
 
 ### ID 44 — DrawPixels `Ob`
 
@@ -659,7 +697,8 @@ These command IDs appear in the factory but are rarely seen in normal visualizat
 | 30 | AreaGradientStyle | No | Not seen in captures |
 | 36 | DrawArc/Pie | No | Not implemented |
 | 37 | InitVisualization | Yes | |
-| 42 | TouchRectangles | Yes | No-op (metadata only) |
+| 42 | TouchHandlingFlags | Yes | No-op (metadata only) |
+| 43 | TouchRectangles | Yes | No-op (metadata only) |
 | 44 | DrawPixels | No | Not implemented |
 | 45 | DrawPrimitive (2pt) | Yes | |
 | 46 | DrawText (latin1) | Yes | |

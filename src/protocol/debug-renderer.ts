@@ -39,7 +39,8 @@ const CMD_DRAW_POLYGON_FLOAT = 59;
 const CMD_DRAW_PRIMITIVE_FLOAT_QUAD = 60;
 const CMD_DRAW_PRIMITIVE_FLOAT_RECT = 61;
 const CMD_INIT_VISUALIZATION = 37;
-const CMD_TOUCH_RECTANGLES = 42;
+const CMD_TOUCH_HANDLING_FLAGS = 42;
+const CMD_TOUCH_RECTANGLES = 43;
 const CMD_SET_RENDER_PARAMETER = 66;
 const CMD_SET_CORNER_RADIUS = 73;
 const CMD_CLEAR_RECT_ALT = 93;
@@ -495,7 +496,7 @@ export class ProtocolDebugRenderer {
         continue;
       }
 
-      if (command.id === CMD_TOUCH_RECTANGLES) {
+      if (command.id === CMD_TOUCH_HANDLING_FLAGS || command.id === CMD_TOUCH_RECTANGLES) {
         // Touch metadata updates hit testing only; no visual effect.
         continue;
       }
