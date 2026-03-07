@@ -573,6 +573,58 @@ export function buildMouseUp(clientId: number, x: number, y: number, sessionId: 
   return buildGetPaintData(payload, sessionId);
 }
 
+export function buildMouseClick(clientId: number, x: number, y: number, sessionId: number): ArrayBuffer {
+  const payload = buildEventPayload(8, clientId, packPointToUint32(x, y), 0);
+  return buildGetPaintData(payload, sessionId);
+}
+
+export function buildMouseDoubleClick(clientId: number, x: number, y: number, sessionId: number): ArrayBuffer {
+  const payload = buildEventPayload(32, clientId, packPointToUint32(x, y), 0);
+  return buildGetPaintData(payload, sessionId);
+}
+
+export function buildMouseWheel(clientId: number, param1: number, param2: number, sessionId: number): ArrayBuffer {
+  const payload = buildEventPayload(64, clientId, param1 >>> 0, param2 >>> 0);
+  return buildGetPaintData(payload, sessionId);
+}
+
+export function buildKeyDown(clientId: number, keyCode: number, sessionId: number): ArrayBuffer {
+  const payload = buildEventPayload(128, clientId, keyCode >>> 0, 0);
+  return buildGetPaintData(payload, sessionId);
+}
+
+export function buildKeyUp(clientId: number, keyCode: number, sessionId: number): ArrayBuffer {
+  const payload = buildEventPayload(256, clientId, keyCode >>> 0, 0);
+  return buildGetPaintData(payload, sessionId);
+}
+
+export function buildKeyPress(clientId: number, keyCode: number, sessionId: number): ArrayBuffer {
+  const payload = buildEventPayload(257, clientId, keyCode >>> 0, 0);
+  return buildGetPaintData(payload, sessionId);
+}
+
+export function buildMouseEnter(clientId: number, sessionId: number): ArrayBuffer {
+  const payload = buildEventPayload(2048, clientId, 0, 0);
+  return buildGetPaintData(payload, sessionId);
+}
+
+export function buildMouseOut(clientId: number, sessionId: number): ArrayBuffer {
+  const payload = buildEventPayload(4096, clientId, 0, 0);
+  return buildGetPaintData(payload, sessionId);
+}
+
+export function buildRawInputEvent(
+  eventTag: number,
+  clientId: number,
+  param1: number,
+  param2: number,
+  sessionId: number,
+  extraData?: Uint8Array
+): ArrayBuffer {
+  const payload = buildEventPayload(eventTag >>> 0, clientId, param1 >>> 0, param2 >>> 0, extraData);
+  return buildGetPaintData(payload, sessionId);
+}
+
 export function buildViewportEvent(
   clientId: number,
   width: number,
