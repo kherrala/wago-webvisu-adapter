@@ -305,9 +305,9 @@ EventMessageFactory.prototype = {
     mq: function(a) {
         var b = this;
         return function(c, d, e, f, g, h) {
-            c = b.Mt(e, b.a.s.L, c, d, f, a, g);
+            c = b.Mt(e, b.a.sessionInfo.externId, c, d, f, a, g);
             return h ? c : b.a.$b(c)
-        }
+        };
     },
     Mt: function(a, b, c, d, e, f, g) {
         var h, l = 1;
@@ -440,7 +440,7 @@ BrowserUtil.aA = function(a, b, c) {
             if (null === d) c("DoZeroWidthHeightWorkaround: svg xml not available");
             else {
                 var e = BrowserUtil.Aj(d.getAttribute("viewBox"));
-                null === e ? c("DoZeroWidthHeightWorkaround: no view box available") : (d.setAttribute("width", e.O), d.setAttribute("height", e.Z), d = (new XMLSerializer).serializeToString(d), b("data:image/svg+xml;base64," + btoa(d)))
+                null === e ? c("DoZeroWidthHeightWorkaround: no view box available") : (d.setAttribute("width", e.width), d.setAttribute("height", e.height), d = (new XMLSerializer).serializeToString(d), b("data:image/svg+xml;base64," + btoa(d)))
             }
         })
     } catch (d) {
@@ -586,13 +586,13 @@ Configuration.prototype = {
 var SessionInfo;
 SessionInfo = function(a, b, c, d, e) {
     this.CommBufferSize = a;
-    this.Ja = b;
-    this.se = c;
-    this.Hh = d;
-    this.bg = ProtocolConstants.R;
-    this.L = ProtocolConstants.i;
-    this.fk = "";
-    this.Cs = e
+    this.isBigEndian = b;
+    this.deviceSessionId = c;
+    this.isDemoMode = d;
+    this.defaultClientId = ProtocolConstants.R;
+    this.externId = ProtocolConstants.i;
+    this.applicationName = "";
+    this.supportsPost = e
 };
 var ZIndexLayer;
 ZIndexLayer = function() {};
@@ -625,7 +625,7 @@ GradientFill = function(a, b, c, d, e, f, g, h, l) {
 };
 GradientFill.prototype = {
     gz: function(a, b) {
-        if (0 === b.w() || 0 === b.v()) return "#ffffff";
+        if (0 === b.getWidth() || 0 === b.getHeight()) return "#ffffff";
         switch (this.Rk) {
             case 0:
                 return this.In(a, b, !1);
@@ -638,34 +638,34 @@ GradientFill.prototype = {
         }
     },
     In: function(a, b, c) {
-        var d = b.qh();
+        var d = b.getCenter();
         var e = 90 < this.Ka ? GeometryUtil.fa(180 - this.Ka) : GeometryUtil.fa(this.Ka);
-        var f = d.c - Math.max(b.v(), b.w()) * Math.cos(e);
-        var g = d.f - Math.max(b.v(), b.w()) * Math.sin(e);
-        if (this.fp(d.c, d.f, f, g, b.m, b.o, b.m, b.X)) {
+        var f = d.c - Math.max(b.getHeight(), b.getWidth()) * Math.cos(e);
+        var g = d.f - Math.max(b.getHeight(), b.getWidth()) * Math.sin(e);
+        if (this.fp(d.c, d.f, f, g, b.left, b.top, b.left, b.bottom)) {
             d = e;
-            e = b.w() / 2 * Math.tan(d);
-            e = b.v() / 2 - e;
+            e = b.getWidth() / 2 * Math.tan(d);
+            e = b.getHeight() / 2 - e;
             d = Math.PI / 2 - d;
             d = e * Math.cos(d);
             f = d * d / e;
             g = e - f;
             var h = Math.sqrt(Math.max(0,
                 g * f));
-            e = b.m - h;
-            d = b.o + g;
-            f = b.T + h;
-            g = b.X - g
-        } else this.fp(d.c, d.f, f, g, b.m, b.o, b.T, b.o) ? (d = e, e = b.v() / 2 / Math.tan(d), e = b.w() / 2 - e, d = Math.PI / 2 - d, d = Math.cos(d) * e, f = d * d / e, h = Math.sqrt(Math.max(0, (e - f) * f)), e = b.m + f, d = b.o - h, f = b.T - f, g = b.X + h) : (e = b.m, d = b.o, f = b.T, g = b.X);
-        90 < this.Ka && (e = b.T - (e - b.m), f = b.T - (f - b.m));
+            e = b.left - h;
+            d = b.top + g;
+            f = b.right + h;
+            g = b.bottom - g
+        } else this.fp(d.c, d.f, f, g, b.left, b.top, b.right, b.top) ? (d = e, e = b.getHeight() / 2 / Math.tan(d), e = b.getWidth() / 2 - e, d = Math.PI / 2 - d, d = Math.cos(d) * e, f = d * d / e, h = Math.sqrt(Math.max(0, (e - f) * f)), e = b.left + f, d = b.top - h, f = b.right - f, g = b.bottom + h) : (e = b.left, d = b.top, f = b.right, g = b.bottom);
+        90 < this.Ka && (e = b.right - (e - b.left), f = b.right - (f - b.left));
         a = a.createLinearGradient(e, d, f, g);
         a.addColorStop(0, this.bi);
         c ? (a.addColorStop(.45, this.tg), a.addColorStop(.55, this.tg), a.addColorStop(1, this.bi)) : a.addColorStop(1, this.tg);
         return a
     },
     jt: function(a, b) {
-        var c = new Point(b.m +
-            b.w() * this.st, b.o + b.v() * this.tt);
+        var c = new Point(b.left +
+            b.getWidth() * this.st, b.top + b.getHeight() * this.tt);
         b = this.rv(b, c);
         a = a.createRadialGradient(c.c, c.f, 0, c.c, c.f, b);
         a.addColorStop(0, this.bi);
@@ -683,10 +683,10 @@ GradientFill.prototype = {
     },
     rv: function(a, b) {
         var c = [];
-        c[0] = this.fi(new Point(a.m, a.o), b);
-        c[1] = this.fi(new Point(a.T, a.o), b);
-        c[2] = this.fi(new Point(a.T, a.X), b);
-        c[3] = this.fi(new Point(a.m, a.X), b);
+        c[0] = this.fi(new Point(a.left, a.top), b);
+        c[1] = this.fi(new Point(a.right, a.top), b);
+        c[2] = this.fi(new Point(a.right, a.bottom), b);
+        c[3] = this.fi(new Point(a.left, a.bottom), b);
         for (a = b = 0; 4 > a; ++a) b =
             Math.max(b, c[a]);
         return Math.sqrt(b)
@@ -714,22 +714,22 @@ KeyboardHandler.prototype = {
         }, !1)
     },
     tw: function(a) {
-        var b = this.a.s;
+        var b = this.a.sessionInfo;
         a = this.kv(a);
-        null !== b && null !== a && this.a.$b(EventMessage.fa(b.L, a))
+        null !== b && null !== a && this.a.$b(EventMessage.fa(b.externId, a))
     },
     sw: function(a) {
         var b = this.Io(a),
-            c = this.a.s;
+            c = this.a.sessionInfo;
         this.Jn(a);
-        null !== c && null !== b && this.a.$b(EventMessage.A(128, c.L, b.key, b.flags))
+        null !== c && null !== b && this.a.$b(EventMessage.A(128, c.externId, b.key, b.flags))
     },
     uw: function(a) {
         var b = this.Io(a),
-            c = this.a.s;
+            c = this.a.sessionInfo;
         this.Jn(a);
         null !==
-            c && null !== b && this.a.$b(EventMessage.A(256, c.L, b.key, b.flags))
+            c && null !== b && this.a.$b(EventMessage.A(256, c.externId, b.key, b.flags))
     },
     Io: function(a) {
         var b = a.keyCode,
@@ -822,11 +822,11 @@ PointerHandler.prototype = {
         })
     },
     mi: function(a, b) {
-        if (null !== this.a.s) {
+        if (null !== this.a.sessionInfo) {
             var c = BrowserUtil.Dd(a);
             this.a.ba && (a = Util.lb(a.target, this.Qk()),
                 c = c.offset(a));
-            b = EventMessage.b(b, this.a.s.L, c);
+            b = EventMessage.b(b, this.a.sessionInfo.externId, c);
             this.a.$b(b)
         }
     },
@@ -849,7 +849,7 @@ PointerHandler.prototype = {
         Util.$c(a) && this.mi(a, EventType.i)
     },
     Ko: function(a) {
-        Util.$c(a) && (this.a.Sc.vj(a),
+        Util.$c(a) && (this.a.editControlManager.vj(a),
             this.a.wc.Wq(a), this.mi(a, EventType.A))
     },
     Lo: function(a) {
@@ -890,29 +890,29 @@ PointerHandler.prototype = {
                     return
             }
             a.touches && 1 <= a.touches.length ? b = BrowserUtil.qe(a.touches[0]) : a.changedTouches && 1 <= a.changedTouches.length && (b = BrowserUtil.qe(a.changedTouches[0]));
-            null !== b && (null !== this.a.s && (c === EventType.A && this.a.wc.kB(b), c = EventMessage.b(c, this.a.s.L, b), this.a.$b(c)), a.preventDefault())
+            null !== b && (null !== this.a.sessionInfo && (c === EventType.A && this.a.wc.kB(b), c = EventMessage.b(c, this.a.sessionInfo.externId, b), this.a.$b(c)), a.preventDefault())
         }
     }
 };
 var PaintData;
 PaintData = function(a, b, c) {
-    this.Jd = a;
-    this.bu = b;
-    this.uk = c;
+    this.commandCount = a;
+    this.bufferCapacity = b;
+    this.continuation = c;
     this.op = BinaryBuffer.b(1E3)
 };
 PaintData.prototype = {
     Jz: function() {
-        return this.bu - this.op.size()
+        return this.bufferCapacity - this.op.size();
     },
-    Hc: function() {
+    toArrayBuffer: function() {
         return this.op
     },
     finish: function() {
-        this.uk = 0
+        this.continuation = 0
     },
     je: function() {
-        return 0 === this.uk
+        return 0 === this.continuation;
     }
 };
 var PaintCommandProcessor;
@@ -924,7 +924,7 @@ PaintCommandProcessor.prototype = {
     b: function() {
         var a = this.a.Ga(),
             b = this.a.Na(this.ci);
-        b.Qm(this.ci.L);
+        b.Qm(this.ci.externId);
         a.Za(b.Oa(), this, !0)
     },
     hb: function() {},
@@ -935,19 +935,19 @@ CanvasRenderer = function(a, b, c, d, e) {
     this.a = a;
     b = this.b(b);
     var f = 1;
-    e ? c = b : (this.Cc = new CommandCache, c = this.b(c));
+    e ? c = b : (this.commandCache = new CommandCache, c = this.b(c));
     if (b.width !== c.width || b.height !== c.height) throw Error("Expected two canvasses of the same size");
     BrowserUtil.zB(b, c);
-    this.Ea = this.i(b);
-    this.Y = this.i(c);
+    this.visibleContext = this.i(b);
+    this.offscreenContext = this.i(c);
     this.by = URLParamUtil.jn(this.a.jh, "WorkaroundDisableDPRBasedZoom", !1);
     d && (this.Pq() && (f = BrowserUtil.pa()), this.Dq(f));
     this.ti = new ClipRegionCollection;
     this.Ak = BrowserUtil.pa();
-    this.ui = new GraphicsState(this.Y);
-    this.xe = new GraphicsState(this.Ea);
+    this.ui = new GraphicsState(this.offscreenContext);
+    this.xe = new GraphicsState(this.visibleContext);
     this.Ie = !1;
-    this.Di = new NamespaceResolver;
+    this.namespaceResolver = new NamespaceResolver;
     this.$k = new ImageCache(this.a);
     this.ej = new TextWidthCache(this);
     this.Rl = new TextBreakCache(this);
@@ -956,33 +956,33 @@ CanvasRenderer = function(a, b, c, d, e) {
 };
 CanvasRenderer.prototype = {
     fe: function() {
-        return new Rectangle(0, 0, this.Ea.canvas.width, this.Ea.canvas.height);
+        return new Rectangle(0, 0, this.visibleContext.canvas.width, this.visibleContext.canvas.height);
     },
     he: function() {
-        return this.a.ba ? this.Ea : this.Y
+        return this.a.ba ? this.visibleContext : this.offscreenContext;
     },
     clear: function() {
         this.a.kc && this.a.kc.Em();
         this.a.ai && this.a.ai.Em();
-        this.Y.clearRect(0, 0, this.Y.canvas.width, this.Y.canvas.height);
-        this.Ea.fillStyle = "#ffffff";
-        this.Ea.fillRect(0, 0, this.Ea.canvas.width, this.Ea.canvas.height)
+        this.offscreenContext.clearRect(0, 0, this.offscreenContext.canvas.width, this.offscreenContext.canvas.height);
+        this.visibleContext.fillStyle = "#ffffff";
+        this.visibleContext.fillRect(0, 0, this.visibleContext.canvas.width, this.visibleContext.canvas.height)
     },
     bz: function() {
-        var a = Util.Dd(this.Ea.canvas);
-        return new Point(a.m, a.o);
+        var a = Util.Dd(this.visibleContext.canvas);
+        return new Point(a.left, a.top);
     },
     getContext: function() {
         if (this.a.ba) {
             var a = this.a.U().ma();
             a = this.Ie ? null !==
-                a ? a.Da() : this.Ea : null !== a ? a.Da() : this.Y;
+                a ? a.Da() : this.visibleContext : null !== a ? a.Da() : this.offscreenContext;
             this.getState().Ah(a);
             return a
         }
         a = null;
-        var b = this.Cc.bm(); - 1 !== b && (a = this.Cc.Nj(b));
-        return this.Ie ? null !== a ? a.Ea : this.Ea : null !== a ? a.ei : this.Y
+        var b = this.commandCache.bm(); - 1 !== b && (a = this.commandCache.Nj(b));
+        return this.Ie ? null !== a ? a.visibleContext : this.visibleContext : null !== a ? a.ei : this.offscreenContext;
     },
     wy: function() {
         var a = this.getContext();
@@ -991,16 +991,16 @@ CanvasRenderer.prototype = {
     getState: function() {
         if (this.a.ba) return this.xe;
         var a = null;
-        var b = this.Cc.bm(); - 1 !== b && (a = this.Cc.Nj(b));
+        var b = this.commandCache.bm(); - 1 !== b && (a = this.commandCache.Nj(b));
         return this.Ie ? null !== a ? a.xe : this.xe : null !== a ? a.ct : this.ui
     },
     kA: function() {
         this.Ie = !0;
-        this.a.ba && (this.xe.Ah(this.Ea), this.xe.apply())
+        this.a.ba && (this.xe.Ah(this.visibleContext), this.xe.apply())
     },
     lA: function() {
         this.Ie = !1;
-        this.a.ba && (this.ui.Ah(this.Y), this.ui.apply())
+        this.a.ba && (this.ui.Ah(this.offscreenContext), this.ui.apply())
     },
     zy: function() {
         this.sk = !0
@@ -1008,13 +1008,13 @@ CanvasRenderer.prototype = {
     Cq: function(a, b) {
         this.a.wc.eB(ServiceGroupId.dk);
         this.ti.clear();
-        this.Y.save();
-        this.ui.Ah(this.Y);
-        this.xe.Ah(this.Ea);
+        this.offscreenContext.save();
+        this.ui.Ah(this.offscreenContext);
+        this.xe.Ah(this.visibleContext);
         var c = this.Xw(a),
             d = !1,
             e = this;
-        for (a = 0; a < c.length; ++a) c[a] instanceof DrawImage && !c[a].qz(this.$k, this.Di) && (d = !0), c[a] instanceof UnknownCmd41 && !this.a.ba && c[a].h(this);
+        for (a = 0; a < c.length; ++a) c[a] instanceof DrawImage && !c[a].qz(this.$k, this.namespaceResolver) && (d = !0), c[a] instanceof UnknownCmd41 && !this.a.ba && c[a].h(this);
         this.ot() ? (d ? (Logger.b("Waiting for image(s) to load"), this.$k.qy(function() {
             Logger.b("Loading image(s) finished so continue with drawing");
             e.lo(c, b)
@@ -1029,10 +1029,10 @@ CanvasRenderer.prototype = {
         return (new CookieManager).i("DevicePixelRatioChanged");
     },
     nk: function(a) {
-        this.Ea.canvas.width = this.Y.canvas.width = a.O;
-        this.Ea.canvas.height = this.Y.canvas.height = a.Z;
+        this.visibleContext.canvas.width = this.offscreenContext.canvas.width = a.width;
+        this.visibleContext.canvas.height = this.offscreenContext.canvas.height = a.height;
         var b = this.a.ab();
-        null !== b && (b.style.height = a.Z + "px", b.style.width = a.O + "px", b.style.overflow = "hidden")
+        null !== b && (b.style.height = a.height + "px", b.style.width = a.width + "px", b.style.overflow = "hidden")
     },
     ho: function() {
         return new Size(document.documentElement.clientWidth, document.documentElement.clientHeight);
@@ -1043,7 +1043,7 @@ CanvasRenderer.prototype = {
             var b = this.ho();
             this.nk(b.scale(a));
             var c = this.ho();
-            (c.O > b.O || c.Z > b.Z) && this.nk(c.scale(a))
+            (c.width > b.width || c.height > b.height) && this.nk(c.scale(a))
         } catch (d) {
             Logger.warn("Exception during resizing canvasses: " + d), this.nk((new Size(window.innerWidth, window.innerHeight)).scale(a))
         }
@@ -1051,29 +1051,29 @@ CanvasRenderer.prototype = {
     lo: function(a, b) {
         this.sk && (this.a.kq(), this.sk = !1);
         var c, d = this;
-        if (this.a.fb.$j) {
+        if (this.a.visuSession.$j) {
             for (c = 0; c < a.length; ++c) {
                 var e = a[c];
                 (e instanceof ExtendedCmd8194 || e instanceof ExtendedCmd8192 || e instanceof ExtendedCmd8193) && e.h(this)
             }
             for (c = 0; c < a.length; ++c) e = a[c];
-            this.Y.restore()
+            this.offscreenContext.restore()
         } else if (this.a.ba) {
             for (c =
                 0; c < a.length; ++c) a[c] instanceof ClearRect && a[c].h(this);
-            this.ti.eq(this.Y);
+            this.ti.eq(this.offscreenContext);
             for (c = 0; c < a.length; ++c) e = a[c], e instanceof ClearRect || a[c].h(this);
-            this.Y.restore()
+            this.offscreenContext.restore()
         } else {
             var f = [];
             for (c = 0; c < a.length; ++c) e = a[c], e instanceof ClearRect ? e.h(this) : e instanceof RectDrawVariant && f.push(e);
-            this.ti.eq(this.Y);
+            this.ti.eq(this.offscreenContext);
             for (c = 0; c < a.length; ++c) e = a[c], e instanceof ClearRect || e instanceof RectDrawVariant || e instanceof UnknownCmd41 || a[c].h(this);
-            this.Y.restore();
+            this.offscreenContext.restore();
             for (c = 0; c < f.length; ++c) f[c].h(this)
         }
         this.Hw();
-        this.mu.yj(this.Y);
+        this.mu.yj(this.offscreenContext);
         this.a.Pf(function() {
             d.Ru()
         });
@@ -1104,17 +1104,17 @@ CanvasRenderer.prototype = {
         return null === this.a.W || this.a.W.a.D.zf || !this.a.W.a.D.Hj()
     },
     Hw: function() {
-        if (!(this.a.s.Hh || (void 0 === this.Ao && (this.Ao = Util.b()), 3E4 > Util.b() - this.Ao))) {
-            var a = new Rectangle(this.Y.canvas.width - 160, 10, this.Y.canvas.width - 10, 50);
+        if (!(this.a.sessionInfo.isDemoMode || (void 0 === this.Ao && (this.Ao = Util.b()), 3E4 > Util.b() - this.Ao))) {
+            var a = new Rectangle(this.offscreenContext.canvas.width - 160, 10, this.offscreenContext.canvas.width - 10, 50);
             if (this.a.ba) {
                 var b =
                     document.getElementById("cdsDemoMode");
                 if (null === b) {
                     var c = this.a.ab();
-                    b = this.Ot(a.m, a.o);
+                    b = this.Ot(a.left, a.top);
                     c.appendChild(b)
-                } else b.style.left = a.m + "px", b.style.top = a.o + "px"
-            } else this.Y.save(), this.Y.strokeStyle = "#808080", this.Y.fillStyle = "#c7c7c7", this.Y.lineWidth = 2, GeometryUtil.mg(this.Y, a.m, a.o, a.w(), a.v(), !0, !0, -1, -1), this.Y.fillStyle = "#ffffff", this.Y.font = "16px Arial", this.Y.textAlign = "center", this.Y.textBaseline = "middle", this.Y.fillText("Demo Mode", a.m + a.w() / 2, a.o + a.v() / 2), this.Y.restore()
+                } else b.style.left = a.left + "px", b.style.top = a.top + "px"
+            } else this.offscreenContext.save(), this.offscreenContext.strokeStyle = "#808080", this.offscreenContext.fillStyle = "#c7c7c7", this.offscreenContext.lineWidth = 2, GeometryUtil.mg(this.offscreenContext, a.left, a.top, a.getWidth(), a.getHeight(), !0, !0, -1, -1), this.offscreenContext.fillStyle = "#ffffff", this.offscreenContext.font = "16px Arial", this.offscreenContext.textAlign = "center", this.offscreenContext.textBaseline = "middle", this.offscreenContext.fillText("Demo Mode", a.left + a.getWidth() / 2, a.top + a.getHeight() / 2), this.offscreenContext.restore()
         }
     },
     Ot: function(a, b) {
@@ -1137,15 +1137,15 @@ CanvasRenderer.prototype = {
         return c
     },
     Xw: function(a) {
-        var b = Array(a.Jd),
+        var b = Array(a.commandCount),
             c;
-        if (0 < a.Jd) {
-            var d = BinaryReader.b(a.Hc().Hc(), this.a.s.Ja, this.a.ya());
+        if (0 < a.commandCount) {
+            var d = BinaryReader.b(a.toArrayBuffer().toArrayBuffer(), this.a.sessionInfo.isBigEndian, this.a.ya());
             d = new CommandStreamReader(d);
             for (c =
-                0; c < a.Jd; ++c)
-                if (d.S() < d.size() - 4) {
-                    var e = d.S(),
+                0; c < a.commandCount; ++c)
+                if (d.getPosition() < d.size() - 4) {
+                    var e = d.getPosition(),
                         f = d.getUint32(),
                         g = d.getUint32();
                     b[c] = PaintCommandFactory.createCommand(g, d, f, this);
@@ -1185,9 +1185,9 @@ var DoubleBuffer;
 DoubleBuffer = function(a, b, c) {
     this.Cf = !1;
     this.ei = a;
-    this.Ea = b;
+    this.visibleContext = b;
     this.ct = new GraphicsState(this.ei);
-    this.xe = new GraphicsState(this.Ea);
+    this.xe = new GraphicsState(this.visibleContext);
     this.Mf = c
 };
 DoubleBuffer.prototype = {
@@ -1200,90 +1200,90 @@ DoubleBuffer.prototype = {
 };
 var GraphicsState;
 GraphicsState = function(a) {
-    this.wf = null;
-    this.oi = "#ffffff";
-    this.Oo = !1;
-    this.Ii = "#000000";
-    this.yf = !1;
-    this.Ji = .5;
+    this.gradient = null;
+    this.fillColor = "#ffffff";
+    this.fillColorAlpha = !1;
+    this.strokeColor = "#000000";
+    this.hasLineDash = !1;
+    this.lineWidth = .5;
     this.Op = "#000000";
-    this.Ib = "12px Arial";
-    this.Bg = 12;
-    a.font = this.Ib;
-    this.la = a;
-    this.Qo = this.Po = -1;
+    this.fontString = "12px Arial";
+    this.fontSize = 12;
+    a.font = this.fontString;
+    this.context = a;
+    this.cornerRadiusY = this.cornerRadiusX = -1;
     this.zl = new Point(0, 0);
     this.wl = new Point(0, 0)
 };
 GraphicsState.prototype = {
     Ah: function(a) {
-        null !== a && void 0 !== a && (this.la = a, this.apply(), this.En())
+        null !== a && void 0 !== a && (this.context = a, this.apply(), this.En())
     },
     EA: function(a, b) {
-        this.oi = a;
-        this.Oo = b;
-        this.la.fillStyle = this.oi
+        this.fillColor = a;
+        this.fillColorAlpha = b;
+        this.context.fillStyle = this.fillColor
     },
     OA: function(a, b, c, d, e, f) {
-        this.Ji = a;
-        this.Ii = b;
+        this.lineWidth = a;
+        this.strokeColor = b;
         this.qd = c;
         this.fd = d;
         this.gd = e;
         this.Ed = f;
-        this.la.strokeStyle = this.Ii;
-        this.la.lineWidth = Math.max(1, this.Ji);
-        this.la.lineCap = this.fd;
-        this.la.lineJoin = this.gd;
-        this.la.miterLimit = this.Ed;
-        "function" === typeof this.la.setLineDash ? (this.yf = !1, this.En()) : this.yf = 5 === this.qd
+        this.context.strokeStyle = this.strokeColor;
+        this.context.lineWidth = Math.max(1, this.lineWidth);
+        this.context.lineCap = this.fd;
+        this.context.lineJoin = this.gd;
+        this.context.miterLimit = this.Ed;
+        "function" === typeof this.context.setLineDash ? (this.hasLineDash = !1, this.En()) : this.hasLineDash = 5 === this.qd
     },
     TA: function(a, b) {
         if ("number" !== typeof a) throw new TypeError("Expected numeric value");
         if ("number" !== typeof b) throw new TypeError("Expected numeric value");
-        this.Po = a;
-        this.Qo = b
+        this.cornerRadiusX = a;
+        this.cornerRadiusY = b
     },
     ZA: function(a, b, c) {
-        this.Ib = a;
-        this.Bg = b;
+        this.fontString = a;
+        this.fontSize = b;
         this.Op = c
     },
     apply: function() {
-        this.la.fillStyle !== this.oi && (this.la.fillStyle = this.oi);
-        this.la.strokeStyle !== this.Ii && (this.la.strokeStyle = this.Ii);
-        this.la.lineWidth !== this.Ji && (this.la.lineWidth = this.Ji);
-        this.la.lineCap !== this.fd && (this.la.lineCap = this.fd);
-        this.la.lineJoin !== this.gd && (this.la.lineJoin = this.gd);
-        this.la.miterLimit !== this.Ed && (this.la.miterLimit = this.Ed)
+        this.context.fillStyle !== this.fillColor && (this.context.fillStyle = this.fillColor);
+        this.context.strokeStyle !== this.strokeColor && (this.context.strokeStyle = this.strokeColor);
+        this.context.lineWidth !== this.lineWidth && (this.context.lineWidth = this.lineWidth);
+        this.context.lineCap !== this.fd && (this.context.lineCap = this.fd);
+        this.context.lineJoin !== this.gd && (this.context.lineJoin = this.gd);
+        this.context.miterLimit !== this.Ed && (this.context.miterLimit = this.Ed)
     },
     wm: function() {
         return null ===
-            this.wf ? this.Oo : this.wf.Uk
+            this.gradient ? this.fillColorAlpha : this.gradient.Uk;
     },
     ie: function() {
-        return null !== this.wf
+        return null !== this.gradient;
     },
     HA: function(a) {
-        this.wf = a
+        this.gradient = a
     },
     Oj: function() {
-        this.wf = null;
+        this.gradient = null;
         this.apply()
     },
     qj: function(a) {
-        this.la.fillStyle = this.wf.gz(this.la, a)
+        this.context.fillStyle = this.gradient.gz(this.context, a)
     },
     ur: function(a) {
-        this.Bg = a
+        this.fontSize = a
     },
     tr: function(a) {
-        this.Ib = a
+        this.fontString = a
     },
     En: function() {
-        "function" === typeof this.la.setLineDash && (0 === this.qd && this.la.setLineDash([]), 1 === this.qd && this.la.setLineDash([8, 3]), 2 === this.qd && this.la.setLineDash([3, 3]), 3 === this.qd && this.la.setLineDash([8, 3, 3, 3]), 4 === this.qd && this.la.setLineDash([8, 3, 3, 3, 3,
+        "function" === typeof this.context.setLineDash && (0 === this.qd && this.context.setLineDash([]), 1 === this.qd && this.context.setLineDash([8, 3]), 2 === this.qd && this.context.setLineDash([3, 3]), 3 === this.qd && this.context.setLineDash([8, 3, 3, 3]), 4 === this.qd && this.context.setLineDash([8, 3, 3, 3, 3,
             3
-        ]), 5 === this.qd && (this.yf = !0, this.la.setLineDash([0, 0])))
+        ]), 5 === this.qd && (this.hasLineDash = !0, this.context.setLineDash([0, 0])))
     }
 };
 var CommandCache;
@@ -1327,7 +1327,7 @@ Webvisu = function(a, b, c, d) {
     this.Pk = [];
     this.Bk = [];
     this.rt = Util.ab();
-    this.Sc = new EditControlManager(this);
+    this.editControlManager = new EditControlManager(this);
     this.Dl();
     this.Tl = new TooltipManager;
     this.Va = new CanvasRenderer(this, a, b, c, d);
@@ -1342,7 +1342,7 @@ Webvisu = function(a, b, c, d) {
     this.wc = new PerformanceBenchmarker(this);
     this.Hv(this.Va.he().canvas.id);
     this.ak = new VisuConnectionState;
-    this.fb = new VisuSessionState;
+    this.visuSession = new VisuSessionState;
     this.eh = null;
     this.Ek = new TextPropertySnapshot(new Configuration);
     this.Ac || this.$i("Loading Webvisualization");
@@ -1376,7 +1376,7 @@ Webvisu.prototype = {
     },
     xo: function() {
         var a = this.ye;
-        null !== this.li && (null !== this.Sa && this.Sa.push(this.li), this.li = null);
+        null !== this.li && (null !== this.eventQueue && this.eventQueue.push(this.li), this.li = null);
         this.ye = null;
         try {
             a.h()
@@ -1385,11 +1385,11 @@ Webvisu.prototype = {
         }
     },
     Dl: function() {
-        this.Sa = this.ob = this.g = this.s = null;
+        this.eventQueue = this.configuration = this.g = this.sessionInfo = null;
         this.qp = !1;
         null !==
             this.W && (this.W.Xa(), this.W = null);
-        this.Sc.xm() && this.Sc.close();
+        this.editControlManager.xm() && this.editControlManager.close();
         null !== this.Lf && this.Lf.detach();
         WebvisuExtensionMgr.My()
     },
@@ -1445,22 +1445,22 @@ Webvisu.prototype = {
         return new XhrTransport(this);
     },
     Na: function(a) {
-        a = void 0 !== a ? a : this.s;
-        return null === a ? new MessageBuilder(!0, ProtocolConstants.R, 5E4) : new MessageBuilder(a.Ja, a.bg, a.CommBufferSize);
+        a = void 0 !== a ? a : this.sessionInfo;
+        return null === a ? new MessageBuilder(!0, ProtocolConstants.R, 5E4) : new MessageBuilder(a.isBigEndian, a.defaultClientId, a.CommBufferSize);
     },
     setConfiguration: function(a) {
         "TRACE" === a.LogLevel ? Logger.A(LogLevel.jk) : "DEBUG" === a.LogLevel ? Logger.A(LogLevel.Zj) : "INFO" === a.LogLevel ? Logger.A(LogLevel.Gh) : "WARNING" === a.LogLevel ? Logger.A(LogLevel.vn) : "ERROR" === a.LogLevel ? Logger.A(LogLevel.cn) : "FATAL" === a.LogLevel ? Logger.A(LogLevel.Vr) : Logger.warn("Unexpected loglevel: " + a.LogLevel);
-        this.ob = a;
+        this.configuration = a;
         this.Ek = new TextPropertySnapshot(a);
-        this.ob.TouchHandlingActive && (this.ae = new AnimationConfig, this.Pd = new GestureProcessor(this.getConfiguration()), this.W = new GestureEventHandler(this, new TouchSourceAdapter(this)), this.D = new EventNestingTracker);
-        this.Mi.aB(this.ob.HandleTouchEvents || this.ob.TouchHandlingActive);
-        this.ob.BestFit && !this.ob.WorkaroundDisableResizeHandling && (null === this.Lf && (this.Lf = new WindowResizeHandler(this)), this.Lf.py());
-        this.ba && this.ob.BestFit && (this.ab().style.overflow = "hidden");
+        this.configuration.TouchHandlingActive && (this.ae = new AnimationConfig, this.Pd = new GestureProcessor(this.getConfiguration()), this.W = new GestureEventHandler(this, new TouchSourceAdapter(this)), this.D = new EventNestingTracker);
+        this.Mi.aB(this.configuration.HandleTouchEvents || this.configuration.TouchHandlingActive);
+        this.configuration.BestFit && !this.configuration.WorkaroundDisableResizeHandling && (null === this.Lf && (this.Lf = new WindowResizeHandler(this)), this.Lf.py());
+        this.ba && this.configuration.BestFit && (this.ab().style.overflow = "hidden");
         this.Ac && (this.ak.ProgrammingSystemModeErrorText = a.ProgrammingSystemModeErrorText, this.ak.ProgrammingSystemModeWaitingText =
-            a.ProgrammingSystemModeWaitingText, this.$i(this.ob.ProgrammingSystemModeWaitingText))
+            a.ProgrammingSystemModeWaitingText, this.$i(this.configuration.ProgrammingSystemModeWaitingText))
     },
     getConfiguration: function() {
-        return this.ob
+        return this.configuration;
     },
     ya: function() {
         return this.Ek.yk
@@ -1473,7 +1473,7 @@ Webvisu.prototype = {
         this.qp = a
     },
     wA: function(a) {
-        this.s = a
+        this.sessionInfo = a
     },
     $f: function(a) {
         null === a ? this.g = null : this.g = a
@@ -1501,9 +1501,9 @@ Webvisu.prototype = {
     },
     error: function(a) {
         this.Ac || Logger.error(a);
-        var b = null !== this.ob ? this.ob.ErrorReconnectTime : 1E4;
+        var b = null !== this.configuration ? this.configuration.ErrorReconnectTime : 1E4;
         Logger.info("Will restart in " + b + "ms");
-        null !== this.s && (this.ki = new ConnectionErrorTracker(this.s, this.ob));
+        null !== this.sessionInfo && (this.ki = new ConnectionErrorTracker(this.sessionInfo, this.configuration));
         this.Dl();
         this.gx();
         if (this.Ac) {
@@ -1523,7 +1523,7 @@ Webvisu.prototype = {
         this.yx(new ErrorState(this))
     },
     BA: function(a) {
-        this.Sa = a
+        this.eventQueue = a
     },
     Kl: function(a) {
         var b = this;
@@ -1532,18 +1532,18 @@ Webvisu.prototype = {
         }, a)
     },
     $b: function(a) {
-        null !== this.Sa && (this.Sa.push(a), null !== this.ye && this.ye.gm() && (clearTimeout(this.gb), this.Kl(0)))
+        null !== this.eventQueue && (this.eventQueue.push(a), null !== this.ye && this.ye.gm() && (clearTimeout(this.gb), this.Kl(0)))
     },
     vw: function() {
         if (!this.Ac) {
-            var a = this.s;
+            var a = this.sessionInfo;
             null === a && null !== this.ki &&
                 this.ki.gB() && (a = this.ki.ci);
-            null !== a && a.L !== ProtocolConstants.i && a.bg !== ProtocolConstants.R && (new PaintCommandProcessor(this, a)).b()
+            null !== a && a.externId !== ProtocolConstants.i && a.defaultClientId !== ProtocolConstants.R && (new PaintCommandProcessor(this, a)).b()
         }
     },
     gx: function() {
-        var a = this.Va.Y,
+        var a = this.Va.offscreenContext,
             b;
         for (b = 0; 20 > b; ++b) a.restore()
     },
@@ -1551,7 +1551,7 @@ Webvisu.prototype = {
         URLParamUtil.jn(this.jh, "ProgrammingSystemMode", !1) ? (this.Ac = !0, CefSharp.BindObjectAsync("ProgrammingSystemAccess")) : this.Ac = !1
     },
     changeUpdateRate: function(a) {
-        null !== this.ob && (a < this.ob.UpdateRate && null !== this.ye && (clearTimeout(this.gb), this.Kl(0)), this.ob.UpdateRate = a)
+        null !== this.configuration && (a < this.configuration.UpdateRate && null !== this.ye && (clearTimeout(this.gb), this.Kl(0)), this.configuration.UpdateRate = a)
     }
 };
 var WebvisuAutotest;
@@ -1658,7 +1658,7 @@ WebvisuAutotest.prototype = {
         }
     },
     raiseKey: function(a, b, c, d, e) {
-        var f = this.a.Sc.Hb;
+        var f = this.a.editControlManager.Hb;
         null !== f ? this.el(b) ? this.tp(f, a, b, c, d, e, !0) : this.Uw(f, b, a, c) : this.tp(window.document.getElementById(this.qt), a, b, c, d, e, !1)
     },
     el: function(a) {
@@ -1759,7 +1759,7 @@ var WebvisuExtensionMgr;
             if (null === g) throw Error("null value not expected");
             c = new Rectangle(c, d, c + e, d + f);
             d = Util.Dd(g);
-            c = c.ac(d.m, d.o);
+            c = c.ac(d.left, d.top);
             this.ba ? g.appendChild(b) : (Util.Cd(b, c), b.style.zIndex = 300, g.parentNode.appendChild(b));
             g.dn = b
         },
@@ -1780,7 +1780,7 @@ var WebvisuExtensionMgr;
             this.gf = []
         },
         Fy: function(b, c, d, e) {
-            b.create(d.m, d.o, d.w(), d.v(), e);
+            b.create(d.left, d.top, d.getWidth(), d.getHeight(), e);
             this.gf[c] = b
         },
         pm: function(b) {
@@ -1793,7 +1793,7 @@ var WebvisuExtensionMgr;
         },
         Dy: function(b, c) {
             b = this.xi(b);
-            null !== b && b.move(c.m, c.o, c.w(), c.v())
+            null !== b && b.move(c.left, c.top, c.getWidth(), c.getHeight())
         },
         Cy: function(b, c, d) {
             b = this.xi(b);
@@ -1817,8 +1817,8 @@ var BinaryBuffer;
 BinaryBuffer = function(a) {
     void 0 === a && (a = 10);
     this.M = new ArrayBuffer(a);
-    this.Qc = new Uint8Array(this.M);
-    this.Ca = 0
+    this.uint8View = new Uint8Array(this.M);
+    this.writePosition = 0
 };
 BinaryBuffer.b = function(a) {
     return BrowserUtil.bd() ? new BinaryBuffer_StringBased : new BinaryBuffer(a);
@@ -1828,60 +1828,60 @@ BinaryBuffer.prototype = {
         this.Ap(this.kw(this.M.byteLength))
     },
     Ap: function(a) {
-        var b = this.Qc;
+        var b = this.uint8View;
         this.M = new ArrayBuffer(a);
-        this.Qc = new Uint8Array(this.M);
-        for (a = 0; a < this.Ca; ++a) this.Qc[a] = b[a]
+        this.uint8View = new Uint8Array(this.M);
+        for (a = 0; a < this.writePosition; ++a) this.uint8View[a] = b[a]
     },
     kw: function(a) {
         return 500 > a ? 2 * a : Math.floor(1.3 * a)
     },
-    Zi: function(a, b) {
-        this.Qc[a] = b
+    setByteAt: function(a, b) {
+        this.uint8View[a] = b
     },
-    hr: function(a) {
+    ensureCapacity: function(a) {
         a > this.M.byteLength && this.Ap(a)
     },
-    oj: function(a) {
-        this.Ca >= this.M.byteLength && this.hx();
-        var b = this.Ca;
-        this.Ca++;
-        this.Zi(b, a)
+    appendByte: function(a) {
+        this.writePosition >= this.M.byteLength && this.hx();
+        var b = this.writePosition;
+        this.writePosition++;
+        this.setByteAt(b, a)
     },
-    fm: function(a, b, c) {
+    appendBytes: function(a, b, c) {
         var d = new Uint8Array(a);
-        this.hr(this.size() + c);
-        if (200 < c && 0 === b % 4 && 0 === this.Ca %
+        this.ensureCapacity(this.size() + c);
+        if (200 < c && 0 === b % 4 && 0 === this.writePosition %
             4 && !BrowserUtil.fs()) {
             var e = Math.floor(c / 4);
-            var f = Math.floor(this.Ca / 4);
+            var f = Math.floor(this.writePosition / 4);
             a = new Uint32Array(a, 4 * Math.floor(b / 4), e);
             var g = new Uint32Array(this.M, 4 * f, e),
                 h = c - 4 * e;
             for (f = 0; f < e; ++f) g[f] = a[f];
-            for (f = 0; f < h; ++f) this.Qc[this.Ca + f + 4 * e] = d[b + f + 4 * e]
-        } else if (d.slice) this.Qc.set(d.slice(b, b + c), this.Ca);
+            for (f = 0; f < h; ++f) this.uint8View[this.writePosition + f + 4 * e] = d[b + f + 4 * e]
+        } else if (d.slice) this.uint8View.set(d.slice(b, b + c), this.writePosition);
         else
-            for (f = 0; f < c; ++f) this.Qc[this.Ca + f] = d[b + f];
-        this.Ca += c
+            for (f = 0; f < c; ++f) this.uint8View[this.writePosition + f] = d[b + f];
+        this.writePosition += c
     },
     Hm: function(a, b) {
-        this.Zi(a, b)
+        this.setByteAt(a, b)
     },
-    Hq: function(a) {
-        return this.Qc[a]
+    getByteAt: function(a) {
+        return this.uint8View[a];
     },
     size: function() {
-        return this.Ca
+        return this.writePosition;
     },
-    Hc: function() {
-        var a = new ArrayBuffer(this.Ca),
+    toArrayBuffer: function() {
+        var a = new ArrayBuffer(this.writePosition),
             b = new Uint8Array(this.M),
             c = new Uint8Array(a);
-        if (b.slice) c.set(b.slice(0, this.Ca), 0);
+        if (b.slice) c.set(b.slice(0, this.writePosition), 0);
         else {
             var d;
-            for (d = 0; d < this.Ca; ++d) c[d] = b[d]
+            for (d = 0; d < this.writePosition; ++d) c[d] = b[d]
         }
         return a
     }
@@ -1893,46 +1893,46 @@ var BinaryBuffer_StringBased;
     }
     BinaryBuffer_StringBased = function() {
         this.M = "";
-        this.Ca = 0
+        this.writePosition = 0
     };
     BinaryBuffer_StringBased.prototype = {
-        Zi: function(b, c) {
+        setByteAt: function(b, c) {
             var d = null,
                 e = null;
             0 < b && (d = this.M.substr(0, 2 * b));
-            b < this.Ca - 1 && (e = this.M.substr(2 * b + 2, this.M.length - 2 * b - 2));
+            b < this.writePosition - 1 && (e = this.M.substr(2 * b + 2, this.M.length - 2 * b - 2));
             b = "";
             null !== d && (b = d);
             b = b.concat(a(c));
             null !== e && (b = b.concat(e));
             this.M = b
         },
-        hr: function() {},
-        oj: function(b) {
+        ensureCapacity: function() {},
+        appendByte: function(b) {
             this.M = this.M.concat(a(b));
-            this.Ca++
+            this.writePosition++
         },
         oy: function(b) {
             var c = "",
                 d;
             for (d = 0; d < b.length; ++d) c = c.concat(a(b.charCodeAt(d)));
             this.M = this.M.concat(c);
-            this.Ca += c.length / 2
+            this.writePosition += c.length / 2
         },
-        fm: function(b, c, d) {
+        appendBytes: function(b, c, d) {
             this.M = this.M.concat(b.substr(2 * c, 2 * d));
-            this.Ca += d
+            this.writePosition += d
         },
         Hm: function(b, c) {
-            this.Zi(b, c)
+            this.setByteAt(b, c)
         },
-        Hq: function(b) {
+        getByteAt: function(b) {
             return this.M.charCodeAt(2 * b) - 65 << 4 | this.M.charCodeAt(2 * b + 1) - 65
         },
         size: function() {
-            return this.Ca
+            return this.writePosition;
         },
-        Hc: function() {
+        toArrayBuffer: function() {
             return this.M
         }
     }
@@ -1974,7 +1974,7 @@ var BinaryReader;
         this.Gd = v;
         this.M = g;
         this.j = r;
-        this.Qc = new Uint8Array(this.M);
+        this.uint8View = new Uint8Array(this.M);
         this.Zd = l;
         this.F = new LowLevelBinaryParser(this, this.ca)
     };
@@ -1982,13 +1982,13 @@ var BinaryReader;
         return BrowserUtil.$z() ? new BinaryReader_DataView(g, h, l, r, v) : BrowserUtil.bd() ? new BinaryReader_StringBased(g, h, l, r, v) : new BinaryReader(g, h, l, r, v);
     };
     BinaryReader.prototype = {
-        Se: function() {
+        getByteOrder: function() {
             return this.ca
         },
-        Ue: function() {
+        getTextDecoder: function() {
             return this.Zd
         },
-        aa: function(g, h) {
+        readString: function(g, h) {
             var l = g * (h ? 2 : 1);
             if (0 > g || this.j + l > this.M.byteLength) throw Error("INDEX_SIZE_ERR: DOM Exception 1");
             g = this.F.er(this.M, this.j, g, l, h, this.Zd);
@@ -1998,13 +1998,13 @@ var BinaryReader;
         Ic: function(g) {
             return this.F.Ic(g)
         },
-        Vf: function() {
+        readChar: function() {
             return String.fromCharCode(this.getUint8())
         },
-        Qe: function() {
+        isEof: function() {
             return this.j >= this.Gd
         },
-        S: function() {
+        getPosition: function() {
             return this.j
         },
         seek: function(g) {
@@ -2041,14 +2041,14 @@ var BinaryReader;
             return this.F.zd()
         },
         ja: function(g) {
-            return this.Qc[g]
+            return this.uint8View[g];
         },
         getUint8: function() {
             var g = this.ja(this.j);
             this.j++;
             return g
         },
-        Uf: function() {
+        getArrayBuffer: function() {
             return this.M
         }
     };
@@ -2090,26 +2090,26 @@ CommandStreamReader = function(a) {
     this.F = a
 };
 CommandStreamReader.prototype = {
-    Se: function() {
-        return this.F.Se()
+    getByteOrder: function() {
+        return this.F.getByteOrder();
     },
-    Ue: function() {
-        return this.F.Ue()
+    getTextDecoder: function() {
+        return this.F.getTextDecoder();
     },
-    aa: function(a, b) {
-        return this.F.aa(a, b)
+    readString: function(a, b) {
+        return this.F.readString(a, b);
     },
     Ic: function(a) {
         return this.F.Ic(a)
     },
-    Vf: function() {
-        return this.F.Vf()
+    readChar: function() {
+        return this.F.readChar();
     },
-    Qe: function() {
-        return this.F.Qe()
+    isEof: function() {
+        return this.F.isEof();
     },
-    S: function() {
-        return this.F.S()
+    getPosition: function() {
+        return this.F.getPosition();
     },
     seek: function(a) {
         this.F.seek(a)
@@ -2118,27 +2118,27 @@ CommandStreamReader.prototype = {
         return this.F.size()
     },
     getFloat64: function() {
-        this.hf(8);
+        this.alignTo(8);
         return this.F.getFloat64()
     },
     getFloat32: function() {
-        this.hf(4);
+        this.alignTo(4);
         return this.F.getFloat32()
     },
     getInt32: function() {
-        this.hf(4);
+        this.alignTo(4);
         return this.F.getInt32()
     },
     getUint32: function() {
-        this.hf(4);
+        this.alignTo(4);
         return this.F.getUint32()
     },
     getInt16: function() {
-        this.hf(2);
+        this.alignTo(2);
         return this.F.getInt16()
     },
     getUint16: function() {
-        this.hf(2);
+        this.alignTo(2);
         return this.F.getUint16()
     },
     getInt8: function() {
@@ -2150,12 +2150,12 @@ CommandStreamReader.prototype = {
     ja: function(a) {
         return this.F.ja(a)
     },
-    Uf: function() {
-        return this.F.Uf()
+    getArrayBuffer: function() {
+        return this.F.getArrayBuffer();
     },
-    hf: function(a) {
+    alignTo: function(a) {
         if (8 === a || 4 === a || 2 === a) {
-            var b = this.F.S();
+            var b = this.F.getPosition();
             0 !== b % a && this.F.seek(b + a - b % a)
         }
     }
@@ -2180,13 +2180,13 @@ BinaryReader_DataView = function(a, b, c, d, e) {
     this.F = new LowLevelBinaryParser(this, this.ca)
 };
 BinaryReader_DataView.prototype = {
-    Se: function() {
+    getByteOrder: function() {
         return this.ca
     },
-    Ue: function() {
+    getTextDecoder: function() {
         return this.Zd
     },
-    aa: function(a, b) {
+    readString: function(a, b) {
         var c = a * (b ? 2 : 1);
         if (0 > a || 2 * (this.j + c) > this.M.length) throw Error("INDEX_SIZE_ERR: DOM Exception 1");
         a = this.F.er(this.M, this.j, a, c, b, this.Zd);
@@ -2196,13 +2196,13 @@ BinaryReader_DataView.prototype = {
     Ic: function(a) {
         return this.F.Ic(a)
     },
-    Vf: function() {
+    readChar: function() {
         return String.fromCharCode(this.getUint8())
     },
-    Qe: function() {
+    isEof: function() {
         return this.j >= this.Gd
     },
-    S: function() {
+    getPosition: function() {
         return this.j
     },
     seek: function(a) {
@@ -2270,7 +2270,7 @@ BinaryReader_DataView.prototype = {
     ja: function(a) {
         return this.pc.getUint8(a)
     },
-    Uf: function() {
+    getArrayBuffer: function() {
         return this.M
     }
 };
@@ -2293,13 +2293,13 @@ BinaryReader_StringBased = function(a, b, c, d, e) {
     this.F = new LowLevelBinaryParser(this, b)
 };
 BinaryReader_StringBased.prototype = {
-    Se: function() {
+    getByteOrder: function() {
         return this.ca
     },
-    Ue: function() {
+    getTextDecoder: function() {
         return this.Zd
     },
-    aa: function(a, b) {
+    readString: function(a, b) {
         var c = a * (b ? 2 : 1);
         if (0 > a || 2 * (this.j + c) > this.M.length) throw Error("INDEX_SIZE_ERR: DOM Exception 1");
         var d = Array(a);
@@ -2321,13 +2321,13 @@ BinaryReader_StringBased.prototype = {
     Ic: function(a) {
         return this.F.Ic(a)
     },
-    Vf: function() {
+    readChar: function() {
         return String.fromCharCode(this.getUint8())
     },
-    Qe: function() {
+    isEof: function() {
         return this.j >= this.Gd
     },
-    S: function() {
+    getPosition: function() {
         return this.j
     },
     seek: function(a) {
@@ -2386,7 +2386,7 @@ BinaryReader_StringBased.prototype = {
     ja: function(a) {
         return this.M.charCodeAt(2 * a) - 65 << 4 | this.M.charCodeAt(2 * a + 1) - 65
     },
-    Uf: function() {
+    getArrayBuffer: function() {
         return this.M
     }
 };
@@ -2397,19 +2397,19 @@ LowLevelBinaryParser = function(a, b) {
 };
 LowLevelBinaryParser.prototype = {
     Ic: function(a) {
-        var b = this.da.S(),
+        var b = this.da.getPosition(),
             c = 0;
         if (a)
             for (; 0 !== this.da.getUint16();) c++;
         else
             for (; 0 !== this.da.getUint8();) c++;
         this.da.seek(b);
-        b = this.da.aa(c, a);
+        b = this.da.readString(c, a);
         a ? this.da.getUint16() : this.da.getUint8();
         return b
     },
     qq: function() {
-        var a = this.da.S(),
+        var a = this.da.getPosition(),
             b = this.da.ja(this.bb(a, 0, 8)),
             c = this.da.ja(this.bb(a, 1, 8)),
             d = this.da.ja(this.bb(a, 2, 8)),
@@ -2425,7 +2425,7 @@ LowLevelBinaryParser.prototype = {
         return 1024 === b ? 0 !== c ? NaN : Infinity * a : -1023 === b ? a * c * Math.pow(2, -1074) : a * (1 + c * Math.pow(2, -52)) * Math.pow(2, b)
     },
     pq: function() {
-        var a = this.da.S(),
+        var a = this.da.getPosition(),
             b = this.da.ja(this.bb(a, 0, 4)),
             c = this.da.ja(this.bb(a, 1, 4)),
             d = this.da.ja(this.bb(a, 2, 4)),
@@ -2441,7 +2441,7 @@ LowLevelBinaryParser.prototype = {
         return a > Math.pow(2, 31) - 1 ? a - Math.pow(2, 32) : a
     },
     om: function() {
-        var a = this.da.S(),
+        var a = this.da.getPosition(),
             b = this.da.ja(this.bb(a, 0, 4)),
             c = this.da.ja(this.bb(a, 1, 4)),
             d = this.da.ja(this.bb(a, 2, 4));
@@ -2453,14 +2453,14 @@ LowLevelBinaryParser.prototype = {
         return a > Math.pow(2, 15) - 1 ? a - Math.pow(2, 16) : a
     },
     nm: function() {
-        var a = this.da.S(),
+        var a = this.da.getPosition(),
             b = this.da.ja(this.bb(a, 0, 2));
         a = this.da.ja(this.bb(a, 1, 2));
         return (b << 8) + a
     },
     tq: function() {
         var a =
-            this.da.ja(this.da.S());
+            this.da.ja(this.da.getPosition());
         return a > Math.pow(2, 7) - 1 ? a - Math.pow(2, 8) : a
     },
     er: function(a, b, c, d, e, f) {
@@ -2527,56 +2527,56 @@ BinaryWriter.prototype = {
         for (a = 0; a < c; ++a) this.Cn(d[a])
     },
     Cn: function(a) {
-        -1 !== this.Ub ? (this.ze.Hm(this.Ub, a), this.Ub++) : this.ze.oj(a)
+        -1 !== this.Ub ? (this.ze.Hm(this.Ub, a), this.Ub++) : this.ze.appendByte(a)
     },
     seek: function(a) {
         this.Ub = a
     },
-    S: function() {
+    getPosition: function() {
         return -1 !== this.Ub ? this.Ub : this.ze.size()
     },
-    pj: function(a) {
+    writePadding: function(a) {
         var b = [204, 221],
             c;
-        for (c = 0; c < a; ++c) this.va(b[c % 2])
+        for (c = 0; c < a; ++c) this.writeUint8(b[c % 2])
     },
-    va: function(a) {
+    writeUint8: function(a) {
         this.Cn(a)
     },
-    cq: function(a) {
+    writeInt8: function(a) {
         this.we(a, Int8Array, 1)
     },
-    Wa: function(a) {
+    writeUint16: function(a) {
         this.we(a, Uint16Array, 2)
     },
-    Db: function(a) {
+    writeInt16: function(a) {
         this.we(a, Int16Array, 2)
     },
-    B: function(a) {
+    writeUint32: function(a) {
         this.we(a, Uint32Array, 4)
     },
-    bq: function(a) {
+    writeInt32: function(a) {
         this.we(a, Int32Array, 4)
     },
-    em: function(a) {
+    writeFloat32: function(a) {
         this.we(a, Float32Array, 4)
     },
-    aq: function(a) {
+    writeFloat64: function(a) {
         this.we(a, Float64Array, 8)
     },
-    ee: function(a, b) {
+    writeUtf8String: function(a, b) {
         this.pg(a, b, !1)
     },
-    Eb: function(a, b) {
+    writeString: function(a, b) {
         this.pg(a, b, !0)
     },
     pg: function(a, b, c) {
         for (var d = 0; d < a.length; ++d) {
             var e = a.charCodeAt(d);
-            b ? this.Wa(e) :
-                128 > e ? this.va(e) : this.va(this.Fk.yq(e))
+            b ? this.writeUint16(e) :
+                128 > e ? this.writeUint8(e) : this.writeUint8(this.Fk.yq(e))
         }
-        c && (b ? this.Wa(0) : this.va(0))
+        c && (b ? this.writeUint16(0) : this.writeUint8(0))
     }
 };
 var BinaryWriter_StringBased;
@@ -2597,51 +2597,51 @@ BinaryWriter_StringBased.prototype = {
     seek: function(a) {
         this.Ub = a
     },
-    S: function() {
+    getPosition: function() {
         return -1 !== this.Ub ? this.Ub : this.ze.size()
     },
-    pj: function(a) {
+    writePadding: function(a) {
         var b = [204, 221],
             c;
-        for (c = 0; c < a; ++c) this.va(b[c % 2])
+        for (c = 0; c < a; ++c) this.writeUint8(b[c % 2])
     },
-    va: function(a) {
+    writeUint8: function(a) {
         this.Fd(this.qf(a, 8, !1))
     },
-    cq: function(a) {
+    writeInt8: function(a) {
         this.Fd(this.qf(a, 8, !0))
     },
-    Wa: function(a) {
+    writeUint16: function(a) {
         this.Fd(this.qf(a, 16, !1))
     },
-    Db: function(a) {
+    writeInt16: function(a) {
         this.Fd(this.qf(a, 16, !0))
     },
-    B: function(a) {
+    writeUint32: function(a) {
         this.Fd(this.qf(a, 32, !1))
     },
-    bq: function(a) {
+    writeInt32: function(a) {
         this.Fd(this.qf(a,
             32, !0))
     },
-    em: function(a) {
+    writeFloat32: function(a) {
         this.Fd(this.vo(a, 23, 8))
     },
-    aq: function(a) {
+    writeFloat64: function(a) {
         this.Fd(this.vo(a, 52, 11))
     },
-    ee: function(a, b) {
+    writeUtf8String: function(a, b) {
         this.pg(a, b, !1)
     },
-    Eb: function(a, b) {
+    writeString: function(a, b) {
         this.pg(a, b, !0)
     },
     pg: function(a, b, c) {
         for (var d = 0; d < a.length; ++d) {
             var e = a.charCodeAt(d);
-            b ? this.Wa(e) : 128 > e ? this.va(e) : this.va(this.Fk.yq(e))
+            b ? this.writeUint16(e) : 128 > e ? this.writeUint8(e) : this.writeUint8(this.Fk.yq(e))
         }
-        c && (b ? this.Wa(0) : this.va(0))
+        c && (b ? this.writeUint16(0) : this.writeUint8(0))
     },
     vo: function(a, b, c) {
         var d = Math.pow(2, c - 1) - 1,
@@ -2700,7 +2700,7 @@ TlvReader = function(a, b, c) {
     this.F = BinaryReader.b(a, b, c, void 0, void 0)
 };
 TlvReader.prototype = {
-    Wf: function() {
+    readMbui: function() {
         var a = 0,
             b = 0;
         do {
@@ -2716,16 +2716,16 @@ TlvWriter = function(a, b, c) {
     this.jd = BinaryWriter.b(a, b, c)
 };
 TlvWriter.prototype = {
-    u: function(a, b) {
+    writeMbui: function(a, b) {
         var c;
-        b = void 0 !== b ? b : this.Mq(a);
+        b = void 0 !== b ? b : this.calculateMbuiSize(a);
         if (0 === b) throw Error("Expected value for MBui greater then zero");
         var d = a;
-        for (c = 0; c < b - 1; c++) this.jd.va(d & 127 | 128), d >>= 7;
-        this.jd.va(d & 127);
+        for (c = 0; c < b - 1; c++) this.jd.writeUint8(d & 127 | 128), d >>= 7;
+        this.jd.writeUint8(d & 127);
         if (0 !== d >> 7) throw Error("Value " + a + " cannot be written as an MBUI with " + b + " bytes");
     },
-    Mq: function(a) {
+    calculateMbuiSize: function(a) {
         var b = 0;
         do a >>= 7, b++; while (0 < a);
         return b
@@ -2952,8 +2952,8 @@ TooltipManager.prototype = {
         this.wd.innerHTML != a && (this.wd.innerHTML = a, this.vt(b, c))
     },
     vt: function(a, b, c) {
-        this.gj + a.O > b && (this.gj = b - a.O, this.wd.style.left = this.gj + "px");
-        this.hj + a.Z > c && (this.hj = c - a.Z, this.wd.style.top = this.hj + "px")
+        this.gj + a.width > b && (this.gj = b - a.width, this.wd.style.left = this.gj + "px");
+        this.hj + a.height > c && (this.hj = c - a.height, this.wd.style.top = this.hj + "px")
     },
     Yt: function(a, b, c, d, e) {
         var f = document.createElement("div");
@@ -3135,7 +3135,7 @@ k.If = function() {
 };
 k.Pe = function(a) {
     this.$ && this.$.Pe(a);
-    this.Va.clearRect(a.m, a.o, a.w(), a.v())
+    this.Va.clearRect(a.left, a.top, a.getWidth(), a.getHeight())
 };
 k.ke = function() {
     this.de.Hk.gA(this);
@@ -3201,15 +3201,15 @@ k.KA = function(a, b) {
         f;
     this.Ei && null !== this.Sd && this.Sd.src === a.src || (a.onload = function() {
         b.si && b.Ag && (a.width = Math.round(b.Jk * a.width), a.height = Math.round(b.Kk * a.height), e = !0, f = new Size(a.width, a.height), d = Util.qe(d, f, b));
-        if (b.Uh && !e) a.width = d.w(), a.height = d.v();
+        if (b.Uh && !e) a.width = d.getWidth(), a.height = d.getHeight();
         else if (b.fl && !e) {
-            if (d.w() / a.width < d.v() / a.height) {
-                var g = Math.round(d.w() * a.height / a.width);
-                var h = d.w()
-            } else g = d.v(), h = Math.round(d.v() * a.width / a.height);
+            if (d.getWidth() / a.width < d.getHeight() / a.height) {
+                var g = Math.round(d.getWidth() * a.height / a.width);
+                var h = d.getWidth()
+            } else g = d.getHeight(), h = Math.round(d.getHeight() * a.width / a.height);
             a.width = h;
             a.height = g;
-            h = new Rectangle(d.m, d.o, d.m + h, d.o + g);
+            h = new Rectangle(d.left, d.top, d.left + h, d.top + g);
             d = Util.re(h, d, b)
         }
         c.Sd ?
@@ -3311,7 +3311,7 @@ k.Qi = function(a) {
     this.Ou(a);
     var b = this.rh(a),
         c = this.xg(b.td);
-    this.Hg(b, EventType.A) || (a.stopPropagation(), this.Ov(a) && void 0 !== this.de && this.de.Sc.xm() && this.de.Sc.vj(a), this.Pg(b.Jf, EventType.A, c))
+    this.Hg(b, EventType.A) || (a.stopPropagation(), this.Ov(a) && void 0 !== this.de && this.de.editControlManager.xm() && this.de.editControlManager.vj(a), this.Pg(b.Jf, EventType.A, c))
 };
 k.Pu = function(a) {
     var b = new Point(a.offsetX, a.offsetY);
@@ -3542,8 +3542,8 @@ k.update = function(a, b, c, d, e, f, g, h, l, r, v, u) {
         var x = c,
             z = d;
         null !== this.kf && null !== this.kf.canvas && (x = this.kf.canvas.width - c, z = this.kf.canvas.height - d);
-        this.xa instanceof Rectangle && (this.Sg ? (a = this.xa.qh().c - c / 2, b = this.xa.qh().f - d / 2, a = Math.min(Math.max(0, x), Math.max(0, a)), b = Math.min(Math.max(0, z), Math.max(0, b))) : this.Oi && (this.j.Oz && this.j.Nz ? (g = this.xa.vb().f, h = this.kf.canvas.height - this.xa.rc().f, this.j.Yq ||
-            this.j.Xq) ? this.j.Yq ? this.j.Xq || (b = this.xa.rc().f, a = this.qk(c)) : (b = this.xa.vb().f - d, a = this.qk(c)) : this.j.dm || this.j.$p ? this.j.dm && (a = this.qk(c), b = this.xa.rc().f, d > h && g > h && (b = this.xa.vb().f - d)) : (a = this.xa.vb().c, b = this.xa.rc().f, d > h && g > h && (b = this.xa.vb().f - d)) : (a = this.xa.rc().c, b = this.xa.rc().f, a > x && (a = this.xa.vb().c - c), b > z && (b = this.xa.vb().f - d), a = Math.min(Math.max(0, x), Math.max(0, a)), b = Math.min(Math.max(0, z), Math.max(0, b)))), g = this.xa.qh().c - a, h = this.xa.qh().f - b);
+        this.xa instanceof Rectangle && (this.Sg ? (a = this.xa.getCenter().c - c / 2, b = this.xa.getCenter().f - d / 2, a = Math.min(Math.max(0, x), Math.max(0, a)), b = Math.min(Math.max(0, z), Math.max(0, b))) : this.Oi && (this.j.Oz && this.j.Nz ? (g = this.xa.vb().f, h = this.kf.canvas.height - this.xa.rc().f, this.j.Yq ||
+            this.j.Xq) ? this.j.Yq ? this.j.Xq || (b = this.xa.rc().f, a = this.qk(c)) : (b = this.xa.vb().f - d, a = this.qk(c)) : this.j.dm || this.j.$p ? this.j.dm && (a = this.qk(c), b = this.xa.rc().f, d > h && g > h && (b = this.xa.vb().f - d)) : (a = this.xa.vb().c, b = this.xa.rc().f, d > h && g > h && (b = this.xa.vb().f - d)) : (a = this.xa.rc().c, b = this.xa.rc().f, a > x && (a = this.xa.vb().c - c), b > z && (b = this.xa.vb().f - d), a = Math.min(Math.max(0, x), Math.max(0, a)), b = Math.min(Math.max(0, z), Math.max(0, b)))), g = this.xa.getCenter().c - a, h = this.xa.getCenter().f - b);
         ClientObjectCanvas.prototype.update.call(this, a, b,
             c, d, e, f, g, h, l, r, v);
         this.ia().style.opacity = 1;
@@ -3841,12 +3841,12 @@ CryptChallengeResponse = function(a, b, c, d) {
 var LoginResult;
 LoginResult = function(a, b) {
     this.tc = a;
-    this.se = b
+    this.deviceSessionId = b
 };
 var DeviceSessionResult;
 DeviceSessionResult = function(a, b, c, d) {
     this.tc = a;
-    this.se = b;
+    this.deviceSessionId = b;
     this.Ad = c;
     this.Error = d
 };
@@ -3982,14 +3982,14 @@ FrameHeader.b = function(a) {
 };
 FrameHeader.prototype = {
     write: function(a, b) {
-        a.Wa(52565);
-        a.Wa(16);
-        a.Wa(this.serviceGroup);
-        a.Wa(this.serviceId);
-        a.B(this.sessionId);
-        a.B(b);
-        a.Wa(0);
-        a.Wa(0)
+        a.writeUint16(52565);
+        a.writeUint16(16);
+        a.writeUint16(this.serviceGroup);
+        a.writeUint16(this.serviceId);
+        a.writeUint32(this.sessionId);
+        a.writeUint32(b);
+        a.writeUint16(0);
+        a.writeUint16(0)
     }
 };
 var ResponseParser;
@@ -4000,8 +4000,8 @@ ResponseParser = function(a, b, c) {
 ResponseParser.prototype = {
     i: function() {
         try {
-            if ("|" !== this.G.Vf()) return "Unexpected format of service: 1";
-            var a = this.Pp(),
+            if ("|" !== this.G.readChar()) return "Unexpected format of service: 1";
+            var a = this.parsePipeDelimited(),
                 b = !1;
             if (4 > a.length) return "Unexpected format of service: 2";
             5 <= a.length && (b = "true" === a[4]);
@@ -4011,35 +4011,35 @@ ResponseParser.prototype = {
         }
     },
     pa: function() {
-        var a = this.Pp(),
+        var a = this.parsePipeDelimited(),
             b;
         for (b = 0; b < a.length; ++b)
             if (0 === a[b].indexOf("IPv4:")) return a[b].substr(5);
         return ""
     },
-    Pp: function() {
-        for (var a = [], b = ""; !this.G.Qe();) {
+    parsePipeDelimited: function() {
+        for (var a = [], b = ""; !this.G.isEof();) {
             var c =
-                this.G.Vf();
+                this.G.readChar();
             "|" === c ? (a.push(b), b = "") : b += c
         }
         return a
     },
     eb: function(a, b) {
-        for (a = this.G.S() + a; this.G.S() < a;) {
-            var c = this.He.Wf(),
-                d = this.He.Wf();
+        for (a = this.G.getPosition() + a; this.G.getPosition() < a;) {
+            var c = this.He.readMbui(),
+                d = this.He.readMbui();
             c = b[c];
-            var e = this.G.S();
+            var e = this.G.getPosition();
             "function" === typeof c && c(this, d);
-            c = this.G.S() - e;
+            c = this.G.getPosition() - e;
             c < d && this.Cx(d - c)
         }
     },
     fa: function(a) {
-        return a ? this.Vw() : this.Ww()
+        return a ? this.readNewDeviceSessionResult() : this.readOldDeviceSessionResult();
     },
-    Ww: function() {
+    readOldDeviceSessionResult: function() {
         try {
             var a = this.nc(1, 2),
                 b = 0,
@@ -4069,7 +4069,7 @@ ResponseParser.prototype = {
             return "Exception during readOldDeviceSessionResult: " + f
         }
     },
-    Vw: function() {
+    readNewDeviceSessionResult: function() {
         try {
             var a = this.nc(1, 10),
                 b = 0,
@@ -4093,9 +4093,9 @@ ResponseParser.prototype = {
         }
     },
     A: function(a, b) {
-        return 2 === a ? this.cA() : this.dA(b ? 65315 : 35)
+        return 2 === a ? this.readNewDeviceCryptResult() : this.readOldDeviceCryptResult(b ? 65315 : 35);
     },
-    cA: function() {
+    readNewDeviceCryptResult: function() {
         try {
             var a = this.nc(1, 2),
                 b = 0,
@@ -4123,8 +4123,8 @@ ResponseParser.prototype = {
                 },
                 38: function(g, h) {
                     var l = BinaryBuffer.b(h);
-                    l.fm(g.G.Uf(), g.G.S(), h);
-                    e = l.Hc()
+                    l.appendBytes(g.G.getArrayBuffer(), g.G.getPosition(), h);
+                    e = l.toArrayBuffer()
                 },
                 65315: function(g) {
                     f = g.G.getUint32()
@@ -4135,7 +4135,7 @@ ResponseParser.prototype = {
             return "Exception during readNewDeviceCryptResult: " + g
         }
     },
-    dA: function(a) {
+    readOldDeviceCryptResult: function(a) {
         try {
             var b = this.nc(1, 2),
                 c = 0,
@@ -4202,9 +4202,9 @@ ResponseParser.prototype = {
     },
     lb: function() {
         try {
-            for (this.nc(4, 1); !this.G.Qe();) {
-                var a = this.He.Wf();
-                this.He.Wf();
+            for (this.nc(4, 1); !this.G.isEof();) {
+                var a = this.He.readMbui();
+                this.He.readMbui();
                 if (65407 === a) return "Visu not supported by the plc";
                 var b = this.G.getUint32();
                 return 2952790016 > b ? b : 4294967290 === b ? "Visualization is not allowed" : 4294967292 === b ? "No more memory on the plc" : 4294967293 === b ? "Connection to invalid application" : 4294967289 === b ? "Too many clients are registering at the same time" : "Unknown error"
@@ -4217,9 +4217,9 @@ ResponseParser.prototype = {
     },
     Ia: function() {
         try {
-            for (this.nc(4, 3); !this.G.Qe();) {
-                var a = this.He.Wf();
-                this.He.Wf();
+            for (this.nc(4, 3); !this.G.isEof();) {
+                var a = this.He.readMbui();
+                this.He.readMbui();
                 if (65407 === a) return "Visu not supported by the plc";
                 var b = this.G.getUint32();
                 return 0 === b || 1 === b ? b : 2 === b ? "Client registration failed" : 3 === b ? "Client registration failed due to an invalid external id" : "Unknown error"
@@ -4282,7 +4282,7 @@ ResponseParser.prototype = {
             }, f[5] = function(g, h) {
                 null === a.buffer && (a.buffer = BinaryBuffer.b(e));
                 if (a.status.cc + c <= e && c <= h) {
-                    for (h = 0; h < c;) a.buffer.oj(g.G.getUint8()), h++;
+                    for (h = 0; h < c;) a.buffer.appendByte(g.G.getUint8()), h++;
                     a.status.cc += c;
                     a.status.result = ProtocolConstants.b
                 } else a.status.cc = 4294967295
@@ -4296,7 +4296,7 @@ ResponseParser.prototype = {
                 g
         }
     },
-    bA: function(a) {
+    readFinishTransferResult: function(a) {
         var b = 0 === a.direction ? a.ff.Lc : a.Xe.Lc;
         b = a.status.result === ProtocolConstants.b && a.status.cc === b && a.status.Fc ? 8 : 9;
         try {
@@ -4333,7 +4333,7 @@ ResponseParser.prototype = {
                             c = g.G.getUint32()
                         },
                         3: function(g, h) {
-                            d.Hc().fm(g.G.Uf(), g.G.S(), Math.min(h, d.Jz()))
+                            d.toArrayBuffer().appendBytes(g.G.getArrayBuffer(), g.G.getPosition(), Math.min(h, d.Jz()))
                         }
                     })
                 }
@@ -4344,7 +4344,7 @@ ResponseParser.prototype = {
         }
     },
     Cx: function(a) {
-        this.G.seek(this.G.S() + a)
+        this.G.seek(this.G.getPosition() + a)
     },
     nc: function(a, b) {
         var c = FrameHeader.b(this.G),
@@ -4370,17 +4370,17 @@ var MessageBuilder;
             a = b
         },
         Oa: function() {
-            return this.M.Hc()
+            return this.M.toArrayBuffer();
         },
         $q: function(b, c, d) {
             this.Wh(1);
-            this.C.ee("|", !1);
-            this.C.ee(b, !1);
-            this.C.ee("|", !1);
-            this.C.ee(c.toString(), !1);
-            this.C.ee("|", !1);
-            this.C.ee(d.toString(), !1);
-            this.C.ee("|", !1)
+            this.C.writeUtf8String("|", !1);
+            this.C.writeUtf8String(b, !1);
+            this.C.writeUtf8String("|", !1);
+            this.C.writeUtf8String(c.toString(), !1);
+            this.C.writeUtf8String("|", !1);
+            this.C.writeUtf8String(d.toString(), !1);
+            this.C.writeUtf8String("|", !1)
         },
         oA: function() {
             this.Wh(3)
@@ -4391,24 +4391,24 @@ var MessageBuilder;
         mh: function(b, c, d) {
             var e = d.length + 1,
                 f = this.De(e, 4, 2);
-            b.u(e + f, 3);
-            c.Eb(d, !1);
+            b.writeMbui(e + f, 3);
+            c.writeString(d, !1);
             this.ve(c, f, 0)
         },
         Gy: function(b) {
             var c = BinaryBuffer.b(500),
                 d = new TlvWriter(c, this.ca),
                 e = d.jd;
-            d.u(64);
-            d.u(4, 3);
-            e.B(2882382797);
-            d.u(65);
+            d.writeMbui(64);
+            d.writeMbui(4, 3);
+            e.writeUint32(2882382797);
+            d.writeMbui(65);
             this.mh(d, e, "WebVisualization");
-            d.u(67);
+            d.writeMbui(67);
             this.mh(d, e, b);
-            d.u(68);
+            d.writeMbui(68);
             this.mh(d, e, VersionInfo.b);
-            d.u(69);
+            d.writeMbui(69);
             this.mh(d, e, VersionInfo.b);
             return c
         },
@@ -4417,28 +4417,28 @@ var MessageBuilder;
                 e = new TlvWriter(d, this.ca),
                 f = e.jd,
                 g = new Uint8Array(c);
-            e.u(16);
+            e.writeMbui(16);
             this.mh(e, f, b);
-            e.u(17);
-            e.u(c.byteLength, 3);
-            for (b = 0; b < g.length; ++b) f.va(g[b]);
+            e.writeMbui(17);
+            e.writeMbui(c.byteLength, 3);
+            for (b = 0; b < g.length; ++b) f.writeUint8(g[b]);
             return d
         },
         Qy: function(b) {
             var c = this.Yb(1, 10);
-            b = this.Gy(b.s.fk);
+            b = this.Gy(b.sessionInfo.applicationName);
             var d = ProtocolConstants.fa;
-            this.J.u(131);
+            this.J.writeMbui(131);
             this.mk(b, this.J, this.C);
-            this.J.u(70);
+            this.J.writeMbui(70);
             BrowserUtil.jB() && (d |= 2);
-            this.J.u(4, 3);
-            this.C.B(d);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(d);
             this.Qb(c)
         },
         mk: function(b, c, d) {
-            var e = 2 >= c.Mq(b.size()) ? 2 : 6;
-            c.u(b.size(), e);
+            var e = 2 >= c.calculateMbuiSize(b.size()) ? 2 : 6;
+            c.writeMbui(b.size(), e);
             this.Vh(d, b)
         },
         Oy: function(b) {
@@ -4447,18 +4447,18 @@ var MessageBuilder;
             this.Qb(c)
         },
         Dn: function(b, c) {
-            this.J.u(34);
-            this.J.u(4, 3);
-            this.C.B(b);
-            this.J.u(37);
-            this.J.u(4, 3);
-            this.C.B(c)
+            this.J.writeMbui(34);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(b);
+            this.J.writeMbui(37);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(c)
         },
         Py: function(b, c) {
             var d = this.Yb(1, 2);
             b = this.Zt(b, c);
             this.Dn(2, 2);
-            this.J.u(129);
+            this.J.writeMbui(129);
             this.mk(b, this.J, this.C);
             this.Qb(d)
         },
@@ -4469,14 +4469,14 @@ var MessageBuilder;
             void 0 === e && (e = ProtocolConstants.A);
             var f = this.Yb(1, 2),
                 g = null;
-            this.J.u(34);
-            this.J.u(4, 3);
-            this.C.B(e);
-            0 !== d && (this.J.u(35), this.J.u(4, 3), this.C.B(d));
+            this.J.writeMbui(34);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(e);
+            0 !== d && (this.J.writeMbui(35), this.J.writeMbui(4, 3), this.C.writeUint32(d));
             b = this.pv(b);
             null !== c && 0 !== d && e === ProtocolConstants.fa && (g = this.ov(c, d));
-            this.J.u(129);
-            this.J.u(b.size() + (null !== g ? g.size() : 0), 2);
+            this.J.writeMbui(129);
+            this.J.writeMbui(b.size() + (null !== g ? g.size() : 0), 2);
             this.Vh(this.C, b);
             null !== g && this.Vh(this.C, g);
             this.Qb(f)
@@ -4492,20 +4492,20 @@ var MessageBuilder;
             d && 0 < d.length && l++;
             0 < l && (r = 8 + 84 * l, g += r);
             e && (v = 2097152);
-            this.J.u(1);
-            this.J.u(g + h, 3);
-            this.C.Eb(b,
+            this.J.writeMbui(1);
+            this.J.writeMbui(g + h, 3);
+            this.C.writeString(b,
                 !1);
             this.ve(this.C, h, 0);
-            this.C.B(v);
-            0 < l && (this.C.B(r), this.C.B(l), c && 0 < c.length && (this.C.Wa(1), this.C.Eb(c, !1), this.C.pj(82 - c.length - 1)), d && 0 < d.length && (this.C.Wa(2), this.C.Eb(d, !1), this.C.pj(82 - d.length - 1)));
+            this.C.writeUint32(v);
+            0 < l && (this.C.writeUint32(r), this.C.writeUint32(l), c && 0 < c.length && (this.C.writeUint16(1), this.C.writeString(c, !1), this.C.writePadding(82 - c.length - 1)), d && 0 < d.length && (this.C.writeUint16(2), this.C.writeString(d, !1), this.C.writePadding(82 - d.length - 1)));
             this.Qb(f)
         },
         wB: function(b) {
             var c = this.Yb(4, 3);
-            this.J.u(3);
-            this.J.u(4, 3);
-            this.C.B(b);
+            this.J.writeMbui(3);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(b);
             this.Qb(c)
         },
         ag: function(b) {
@@ -4513,11 +4513,11 @@ var MessageBuilder;
         },
         vB: function(b) {
             var c = this.Yb(4, 4);
-            this.J.u(132);
-            this.J.u(8, 2);
-            this.J.u(4);
-            this.J.u(4, 3);
-            this.C.B(b);
+            this.J.writeMbui(132);
+            this.J.writeMbui(8, 2);
+            this.J.writeMbui(4);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(b);
             this.Qb(c)
         },
         xB: function(b) {
@@ -4526,35 +4526,35 @@ var MessageBuilder;
         Qm: function(b) {
             var c =
                 this.Yb(4, 2);
-            this.J.u(2);
-            this.J.u(4, 3);
-            this.C.B(b);
+            this.J.writeMbui(2);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(b);
             this.Qb(c)
         },
         Hy: function(b) {
             var c = this.Yb(8, ProtocolConstants.pa),
                 d = b.Kc.length + 1,
                 e = this.De(d, 4, 2);
-            this.J.u(1);
-            this.J.u(d + e);
-            this.C.Eb(b.Kc, !1);
+            this.J.writeMbui(1);
+            this.J.writeMbui(d + e);
+            this.C.writeString(b.Kc, !1);
             this.ve(this.C, e, 0);
-            this.J.u(2);
-            this.J.u(4, 3);
-            this.C.B(0);
-            this.C.B(0);
+            this.J.writeMbui(2);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(0);
+            this.C.writeUint32(0);
             this.Qb(c)
         },
         oq: function(b) {
             var c = this.Yb(8, 0 === b.direction ? 5 : 2),
                 d = b.Kc.length + 1,
                 e = this.De(d, 4, 2);
-            this.J.u(1);
-            this.J.u(d + e);
-            this.C.Eb(b.Kc, !1);
+            this.J.writeMbui(1);
+            this.J.writeMbui(d + e);
+            this.C.writeString(b.Kc, !1);
             this.ve(this.C, e, 0);
-            0 === b.direction ? (this.J.u(2), this.J.u(4, 3), this.C.B(0), this.C.B(0)) : (this.J.u(2), this.J.u(4,
-                3), b.Xe.Lc = b.buffer.size(), this.C.B(0), this.C.B(b.Xe.Lc));
+            0 === b.direction ? (this.J.writeMbui(2), this.J.writeMbui(4, 3), this.C.writeUint32(0), this.C.writeUint32(0)) : (this.J.writeMbui(2), this.J.writeMbui(4,
+                3), b.Xe.Lc = b.buffer.size(), this.C.writeUint32(0), this.C.writeUint32(b.Xe.Lc));
             this.Qb(c)
         },
         nq: function(b) {
@@ -4567,46 +4567,46 @@ var MessageBuilder;
                 else return 1;
                 f > d - b.status.cc && (f = d - b.status.cc);
                 d = this.De(f, 4, 2);
-                this.J.u(6);
-                this.J.u(4, 3);
-                this.C.B(f);
+                this.J.writeMbui(6);
+                this.J.writeMbui(4, 3);
+                this.C.writeUint32(f);
                 b.status.Ve = f;
-                this.J.u(5);
-                this.J.u(4 + f + d, 3);
-                this.C.B(b.Bh);
-                for (e = 0; e < f; e++) this.C.va(b.buffer.getUint8());
+                this.J.writeMbui(5);
+                this.J.writeMbui(4 + f + d, 3);
+                this.C.writeUint32(b.Bh);
+                for (e = 0; e < f; e++) this.C.writeUint8(b.buffer.getUint8());
                 this.ve(this.C, d, 0)
-            } else this.J.u(5), this.J.u(4, 3), this.C.B(b.Bh), this.C.B(ProtocolConstants.b);
+            } else this.J.writeMbui(5), this.J.writeMbui(4, 3), this.C.writeUint32(b.Bh), this.C.writeUint32(ProtocolConstants.b);
             this.Qb(c)
         },
         Iy: function(b) {
             var c =
                 0 === b.direction ? b.ff.Lc : b.Xe.Lc;
             c = this.Yb(8, b.status.result === ProtocolConstants.b && b.status.cc === c && b.status.Fc ? 8 : 9);
-            this.J.u(7);
-            this.J.u(4, 3);
-            this.C.B(b.Bh);
+            this.J.writeMbui(7);
+            this.J.writeMbui(4, 3);
+            this.C.writeUint32(b.Bh);
             this.Qb(c)
         },
         Up: function(b, c, d) {
             c = this.Yb(4, c);
-            b = this.tv(b);
-            this.J.u(d);
+            b = this.buildEventTlv(b);
+            this.J.writeMbui(d);
             this.mk(b, this.J, this.C);
             this.Qb(c)
         },
         Qb: function(b) {
-            var c = this.C.S() - b.Ds;
+            var c = this.C.getPosition() - b.Ds;
             this.dy(b.bs, c)
         },
         Yb: function(b, c) {
             b = new FrameHeader(b, c, this.lu);
             this.Wh(2);
-            this.C.pj(20);
+            this.C.writePadding(20);
             return {
                 bs: b,
-                Ds: this.C.S()
-            }
+                Ds: this.C.getPosition()
+            };
         },
         pv: function(b) {
             var c = BinaryBuffer.b(10 + b.length),
@@ -4614,10 +4614,10 @@ var MessageBuilder;
                 e = d.jd,
                 f = b.length + 1,
                 g = this.De(f, 4, 2);
-            d.u(16);
-            d.u(f +
+            d.writeMbui(16);
+            d.writeMbui(f +
                 g);
-            e.Eb(b, !1);
+            e.writeString(b, !1);
             this.ve(e, g, 0);
             return c
         },
@@ -4626,9 +4626,9 @@ var MessageBuilder;
             c = BinaryBuffer.b(10 + b.length);
             var d = new TlvWriter(c, this.ca),
                 e = d.jd;
-            d.u(17);
-            d.u(b.length, 3);
-            for (d = 0; d < b.length; ++d) e.va(b[d]);
+            d.writeMbui(17);
+            d.writeMbui(b.length, 3);
+            for (d = 0; d < b.length; ++d) e.writeUint8(b[d]);
             return c
         },
         nv: function(b, c) {
@@ -4657,54 +4657,54 @@ var MessageBuilder;
             return f
         },
         iv: function() {
-            return this.Kt - this.C.S()
+            return this.Kt - this.C.getPosition();
         },
-        tv: function(b) {
+        buildEventTlv: function(b) {
             var c = BinaryBuffer.b(100),
                 d = new TlvWriter(c, this.ca),
                 e = d.jd,
                 f = b.zn,
                 g = b.Ha();
-            d.u(1);
-            d.u(16, 3);
-            e.B(b.dc);
-            e.B(b.ss);
-            e.B(b.ts);
-            e.B(b.Rr);
+            d.writeMbui(1);
+            d.writeMbui(16, 3);
+            e.writeUint32(b.eventTag);
+            e.writeUint32(b.param1);
+            e.writeUint32(b.param2);
+            e.writeUint32(b.clientId);
             (null !== f || null !== g && !a) && this.cy(d, f, a ? null : g);
-            null !== b.ef && (d.u(3), d.u(8, 3), e.Wa(b.ef.m), e.Wa(b.ef.o), e.Wa(b.ef.T), e.Wa(b.ef.X));
+            null !== b.ef && (d.writeMbui(3), d.writeMbui(8, 3), e.writeUint16(b.ef.left), e.writeUint16(b.ef.top), e.writeUint16(b.ef.right), e.writeUint16(b.ef.bottom));
             null !== g && a &&
-                (d.u(5), d.u(8, 3), e.B(g.kb), e.B(g.zb));
+                (d.writeMbui(5), d.writeMbui(8, 3), e.writeUint32(g.kb), e.writeUint32(g.zb));
             return c
         },
         cy: function(b, c, d) {
-            b.u(2);
+            b.writeMbui(2);
             var e = 0,
                 f = b.jd;
             null !== d && (e = 8);
             null !== c && (e += c.size());
             var g = this.De(e, 4, 0);
-            b.u(e + g, 3);
-            null !== d && (f.B(d.kb), f.B(d.zb));
+            b.writeMbui(e + g, 3);
+            null !== d && (f.writeUint32(d.kb), f.writeUint32(d.zb));
             null !== c && this.Vh(f, c);
             this.ve(f, g, 0)
         },
         Vh: function(b, c) {
             var d = c.size(),
                 e;
-            for (e = 0; e < d; ++e) b.va(c.Hq(e))
+            for (e = 0; e < d; ++e) b.writeUint8(c.getByteAt(e))
         },
         De: function(b, c, d) {
             for (var e = 0; 0 !== (b + d) % c;) b++, e++;
             return e
         },
         ve: function(b, c, d) {
-            for (var e = 0; e < c; ++e) b.va(d)
+            for (var e = 0; e < c; ++e) b.writeUint8(d)
         },
         Wh: function(b) {
-            this.C.va(b);
-            this.C.va(0);
-            this.C.Wa(0)
+            this.C.writeUint8(b);
+            this.C.writeUint8(0);
+            this.C.writeUint16(0)
         },
         dy: function(b, c) {
             this.C.seek(4);
@@ -4755,10 +4755,10 @@ PointerMoveHandler.prototype = {
         a.stopPropagation();
         var e = new Point(a.pageX, a.pageY),
             f = new Point(a.pageX, a.pageY);
-        e.Nm(c);
+        e.subtractInPlace(c);
         a = new WrappedMouseEvent(a, e, f, d);
         if (null !== this.a.W && this.a.W.handleEvent(a, b)) return !0;
-        b = EventMessage.b(b, this.a.s.L, e);
+        b = EventMessage.b(b, this.a.sessionInfo.externId, e);
         b.sc(d);
         d = Util.$e(f);
         b.$a(d);
@@ -4824,10 +4824,10 @@ var EventMessage;
 EventMessage = function(a, b, c, d) {
     void 0 === c && (c = 0);
     void 0 === d && (d = 0);
-    this.dc = a;
-    this.Rr = b;
-    this.ss = c;
-    this.ts = d;
+    this.eventTag = a;
+    this.clientId = b;
+    this.param1 = c;
+    this.param2 = d;
     this.ef = this.zn = null;
     this.Wg = !1;
     this.cb = null
@@ -4845,11 +4845,11 @@ EventMessage.R = function(a, b, c, d, e, f) {
     a = new EventMessage(516, a, b ? c ? d ? 7 : 5 : d ? 3 : 1 : 0, 0);
     b = BinaryBuffer.b(12);
     c = BinaryWriter.b(b, !0);
-    c.Db(0);
-    c.Db(0);
-    c.Db(e.w() - 1);
-    c.Db(e.v() - 1);
-    c.em(f);
+    c.writeInt16(0);
+    c.writeInt16(0);
+    c.writeInt16(e.getWidth() - 1);
+    c.writeInt16(e.getHeight() - 1);
+    c.writeFloat32(f);
     a.$a(b);
     return a
 };
@@ -4861,7 +4861,7 @@ EventMessage.i = function(a, b, c) {
 };
 EventMessage.prototype = {
     Dr: function(a) {
-        this.ef = new Rectangle(Math.max(0, a.m), Math.max(0, a.T), Math.max(0, a.o), Math.max(0, a.X))
+        this.ef = new Rectangle(Math.max(0, a.left), Math.max(0, a.right), Math.max(0, a.top), Math.max(0, a.bottom))
     },
     $a: function(a) {
         this.zn = a
@@ -4888,9 +4888,9 @@ EventQueue = function() {
 };
 EventQueue.prototype = {
     push: function(a) {
-        2097152 !== a.dc && (this.ap = Util.b());
+        2097152 !== a.eventTag && (this.ap = Util.b());
         if (this.Mv(a) || this.nt(a)) return !0;
-        if (this.vi) return "undefined" !== typeof Logger && Logger.warn(Util.i("Eventqueue full, dropped event with tag {0}", a.dc)), !1;
+        if (this.vi) return "undefined" !== typeof Logger && Logger.warn(Util.i("Eventqueue full, dropped event with tag {0}", a.eventTag)), !1;
         this.Be[this.Vc % this.zc] = a;
         this.Vc = (this.Vc + 1) % this.zc;
         this.Vc === this.Kf && (this.vi = !0);
@@ -4908,17 +4908,17 @@ EventQueue.prototype = {
     },
     nt: function(a) {
         if (!this.empty() &&
-            a.dc === EventType.b && (this.Vc + this.zc - 2) % this.zc > this.Kf && 2 <= this.Be.length) {
+            a.eventTag === EventType.b && (this.Vc + this.zc - 2) % this.zc > this.Kf && 2 <= this.Be.length) {
             a = (this.Vc + this.zc - 2) % this.zc;
             var b = this.Be[a];
-            if (535 === this.Be[(this.Vc + this.zc - 1) % this.zc].dc && b.dc === EventType.b) return this.Vc = a, !0
+            if (535 === this.Be[(this.Vc + this.zc - 1) % this.zc].eventTag && b.eventTag === EventType.b) return this.Vc = a, !0
         }
         return !1
     },
     Mv: function(a) {
-        if (!this.empty() && (a.dc === EventType.b || 2053 === a.dc || 2055 === a.dc || 516 === a.dc)) {
+        if (!this.empty() && (a.eventTag === EventType.b || 2053 === a.eventTag || 2055 === a.eventTag || 516 === a.eventTag)) {
             var b = (this.Vc + this.zc - 1) % this.zc;
-            if (this.Be[b].dc === a.dc) return this.Be[b] = a, !0
+            if (this.Be[b].eventTag === a.eventTag) return this.Be[b] = a, !0
         }
         return !1
     }
@@ -5019,8 +5019,8 @@ CachedImage.prototype = {
                 f = parseInt(this.be.substr(5, 2), 16),
                 g = this.lv(),
                 h = this.Kq();
-            a.width = h.O;
-            a.height = h.Z;
+            a.width = h.width;
+            a.height = h.height;
             b.drawImage(this.od,
                 0, 0);
             var l = b.getImageData(0, 0, a.width, a.height);
@@ -5276,7 +5276,7 @@ ClearRectAndClip = function(a, b) {
 };
 ClearRectAndClip.prototype = {
     h: function(a) {
-        a.getContext().clearRect(this.l.m, this.l.o, this.l.w(), this.l.v());
+        a.getContext().clearRect(this.l.left, this.l.top, this.l.getWidth(), this.l.getHeight());
         a.a.wc.Mj(this.l)
     }
 };
@@ -5289,7 +5289,7 @@ SetClipRect.prototype = {
         a = a.getContext();
         a.save();
         a.beginPath();
-        a.rect(this.l.m, this.l.o, this.l.w() + 1, this.l.v() + 1);
+        a.rect(this.l.left, this.l.top, this.l.getWidth() + 1, this.l.getHeight() + 1);
         a.clip()
     }
 };
@@ -5320,10 +5320,10 @@ Fill3DRect = function(a, b) {
 Fill3DRect.prototype = {
     h: function(a) {
         var b = a.getContext(),
-            c = this.l.m,
-            d = this.l.o,
-            e = this.l.w(),
-            f = this.l.v(),
+            c = this.l.left,
+            d = this.l.top,
+            e = this.l.getWidth(),
+            f = this.l.getHeight(),
             g = b.lineWidth;
         b.save();
         this.Ep = a.a.getConfiguration().SemiTransparencyActive;
@@ -5369,11 +5369,11 @@ Fill3DRect.prototype = {
 };
 var DrawImage;
 DrawImage = function(a, b, c) {
-    a = b.S();
+    a = b.getPosition();
     var d = b.getUint16();
-    var e = b.aa(d, !1);
+    var e = b.readString(d, !1);
     d = b.getUint16();
-    d = b.aa(d, !1);
+    d = b.readString(d, !1);
     "" !== e && (d = e + "." + d);
     this.Af = d;
     this.l = GeometryUtil.ad(b, !0);
@@ -5392,7 +5392,7 @@ DrawImage = function(a, b, c) {
     this.$g = 0 !== (e & 4096);
     this.Ag = !1;
     this.be = GeometryUtil.b(b.getUint32());
-    c >= b.S() - a + 16 && (this.Ag = !0, this.Jk = b.getFloat32(), this.Kk = b.getFloat32());
+    c >= b.getPosition() - a + 16 && (this.Ag = !0, this.Jk = b.getFloat32(), this.Kk = b.getFloat32());
     this.xc = null
 };
 DrawImage.prototype = {
@@ -5405,7 +5405,7 @@ DrawImage.prototype = {
         null !== this.xc && (this.xc.loaded() ? this.vu(a, this.xc.hz(), function() {
             return d.xc.Kq()
         }, c) : this.wu(a, this.l));
-        this.Bx && (c = GeometryUtil.$e(a), a.strokeRect(this.l.m + c, this.l.o + c, this.l.w(), this.l.v()));
+        this.Bx && (c = GeometryUtil.$e(a), a.strokeRect(this.l.left + c, this.l.top + c, this.l.getWidth(), this.l.getHeight()));
         this.Dt(a, b)
     },
     qz: function(a, b) {
@@ -5423,41 +5423,41 @@ DrawImage.prototype = {
     vu: function(a, b, c, d) {
         if (this.si && this.Ag) {
             var e = c();
-            e = new Size(Math.round(this.Jk * e.O), Math.round(this.Kk * e.Z));
+            e = new Size(Math.round(this.Jk * e.width), Math.round(this.Kk * e.height));
             d = Util.qe(d, e, this);
             this.si = !1;
             this.Uh = !0
         }
-        if (this.Uh) a.drawImage(b, d.m, d.o, d.w(), d.v());
+        if (this.Uh) a.drawImage(b, d.left, d.top, d.getWidth(), d.getHeight());
         else if (this.fl) {
             e = c();
-            d.w() / e.O < d.v() / e.Z ? (c = Math.round(d.w() * e.Z / e.O), e = d.w()) : (c = d.v(), e = Math.round(d.v() * e.O / e.Z));
+            d.getWidth() / e.width < d.getHeight() / e.height ? (c = Math.round(d.getWidth() * e.height / e.width), e = d.getWidth()) : (c = d.getHeight(), e = Math.round(d.getHeight() * e.width / e.height));
             var f =
-                new Rectangle(d.m, d.o, d.m + e, d.o + c);
+                new Rectangle(d.left, d.top, d.left + e, d.top + c);
             d = Util.re(f, d, this);
-            a.drawImage(b, d.m, d.o, e, c)
-        } else a.drawImage(b, d.m, d.o)
+            a.drawImage(b, d.left, d.top, e, c)
+        } else a.drawImage(b, d.left, d.top)
     },
     zx: function(a, b, c) {
-        c && (a.save(), b.ec.rj(a, b));
-        this.Pn && (a.save(), a.beginPath(), a.rect(b.m, b.o, b.w() + 1, b.v() + 1), a.clip())
+        c && (a.save(), b.transform.rj(a, b));
+        this.Pn && (a.save(), a.beginPath(), a.rect(b.left, b.top, b.getWidth() + 1, b.getHeight() + 1), a.clip())
     },
     Dt: function(a, b) {
         this.Pn && a.restore();
         b && a.restore()
     },
     wu: function(a, b) {
-        b = b.Rq(-3);
+        b = b.inflate(-3);
         a.save();
         a.fillStyle = "#eeeeee";
         a.strokeStyle = "#ff0000";
         a.lineWidth = 3;
-        a.fillRect(b.m, b.o, b.w(), b.v());
+        a.fillRect(b.left, b.top, b.getWidth(), b.getHeight());
         a.beginPath();
-        a.moveTo(b.m, b.o);
-        a.lineTo(b.T, b.X);
-        a.moveTo(b.T, b.o);
-        a.lineTo(b.m, b.X);
+        a.moveTo(b.left, b.top);
+        a.lineTo(b.right, b.bottom);
+        a.moveTo(b.right, b.top);
+        a.lineTo(b.left, b.bottom);
         a.closePath();
         a.stroke();
         a.restore()
@@ -5473,10 +5473,10 @@ DrawArc = function(a, b) {
 DrawArc.prototype = {
     h: function(a) {
         var b = a.getContext(),
-            c = this.l.w(),
-            d = this.l.v(),
+            c = this.l.getWidth(),
+            d = this.l.getHeight(),
             e = !a.getState().wm(),
-            f = !a.getState().yf,
+            f = !a.getState().hasLineDash,
             g = Math.min(c, d) / 2;
         0 >= c || 0 >= d || (b.save(), this.Xs(b), a.getState().ie() && a.getState().qj(this.sv(g)), b.beginPath(), b.arc(0, 0, g, this.Jp, this.Jp + this.Ix, !1), this.Tu && (b.lineTo(0, 0), b.closePath(), e && b.fill()), b.restore(), f && b.stroke(), a.getState().ie() && a.getState().Oj())
     },
@@ -5484,10 +5484,10 @@ DrawArc.prototype = {
         return new Rectangle(-a, -a, a, a);
     },
     Xs: function(a) {
-        var b = this.l.w(),
-            c = this.l.v();
-        null !== this.l.ec ? this.l.ec.rj(a, this.l) :
-            a.translate(this.l.m + .5, this.l.o + .5);
+        var b = this.l.getWidth(),
+            c = this.l.getHeight();
+        null !== this.l.transform ? this.l.transform.rj(a, this.l) :
+            a.translate(this.l.left + .5, this.l.top + .5);
         a.translate(b / 2, c / 2);
         b > c ? a.scale(b / c, 1) : a.scale(1, c / b)
     }
@@ -5512,7 +5512,7 @@ DrawPolygon.prototype = {
     h: function(a) {
         var b = a.getContext(),
             c = !a.getState().wm(),
-            d = !a.getState().yf;
+            d = !a.getState().hasLineDash;
         if (!(2 > this.N.length)) {
             a.getState().ie() && a.getState().qj(this.Gx());
             d && this.Tw(b);
@@ -5608,17 +5608,17 @@ UnknownCmd31 = function(a, b) {
 UnknownCmd31.prototype = {
     h: function(a) {
         var b = a.getState().zl;
-        var c = new Point(b.c + this.Ml.O, b.f + this.Ml.Z);
+        var c = new Point(b.c + this.Ml.width, b.f + this.Ml.height);
         if (this.Wl) {
             var d = a.getState().wl;
             var e = c.c;
-            c.c = d.c + this.Ml.O;
+            c.c = d.c + this.Ml.width;
             d = e - c.c
-        } else d = this.Mf.O;
-        c = new Rectangle(c.c, c.f, c.c + d, c.f + this.Mf.Z);
+        } else d = this.Mf.width;
+        c = new Rectangle(c.c, c.f, c.c + d, c.f + this.Mf.height);
         (new ShapeRenderer(this.ce, c)).yj(a);
-        this.Wx && (b.c += this.Mf.O);
-        this.Xx && (b.f += this.Mf.Z)
+        this.Wx && (b.c += this.Mf.width);
+        this.Xx && (b.f += this.Mf.height)
     }
 };
 var ShapeRenderer;
@@ -5657,15 +5657,15 @@ ShapeRenderer.prototype = {
     yj: function(a) {
         this.mm = a.getContext();
         this.me = a;
-        this.x = this.l.m;
-        this.y = this.l.o;
-        this.Kr = this.l.w();
-        this.Fb = this.l.v();
-        this.radiusX = a.getState().Po;
-        this.radiusY = a.getState().Qo;
+        this.x = this.l.left;
+        this.y = this.l.top;
+        this.Kr = this.l.getWidth();
+        this.Fb = this.l.getHeight();
+        this.radiusX = a.getState().cornerRadiusX;
+        this.radiusY = a.getState().cornerRadiusY;
         this.fill = !a.getState().wm();
-        this.stroke = !a.getState().yf;
-        this.ar = this.l.ec;
+        this.stroke = !a.getState().hasLineDash;
+        this.ar = this.l.transform;
         0 > this.Kr || 0 > this.Fb || (this.me.getState().ie() && this.me.getState().qj(this.l), this.ou())
     },
     ou: function() {
@@ -5679,7 +5679,7 @@ ShapeRenderer.prototype = {
             h = this.fill,
             l = this.stroke,
             r = this.ar;
-        null !== r && (a.save(), this.l.ec.rj(a, this.l));
+        null !== r && (a.save(), this.l.transform.rj(a, this.l));
         if (this.stroke && null ===
             this.ar) {
             var v = GeometryUtil.$e(a);
@@ -5722,7 +5722,7 @@ DrawText = function(a, b) {
     this.fh = 0 !== (d & 512);
     this.l = GeometryUtil.hg(c, 0 !== (d & 128));
     d = b.getUint16();
-    this.ea = b.aa(d, 11 === a || 47 === a);
+    this.ea = b.readString(d, 11 === a || 47 === a);
     this.Ni = GeometryUtil.BB(this.ea);
     this.Np = GeometryUtil.CB(this.ea);
     this.Ke = this.ea
@@ -5735,7 +5735,7 @@ DrawText.prototype = {
         if (this.ax) {
             var b = this.state.zl;
             this.Wl ? (b = this.state.wl, a = b.c, b = b.f) : (a = b.c, b = b.f);
-            this.l = new Rectangle(a, b, a + this.l.w(), b + this.l.v())
+            this.l = new Rectangle(a, b, a + this.l.getWidth(), b + this.l.getHeight())
         }
         this.pu()
     },
@@ -5744,14 +5744,14 @@ DrawText.prototype = {
             b = this.state,
             c = this.me;
         a.save();
-        null !== this.l.ec && this.l.ec.rj(a, this.l);
+        null !== this.l.transform && this.l.transform.rj(a, this.l);
         a.beginPath();
-        a.rect(this.l.m - .5, this.l.o - .5, this.l.w() + 1, this.l.v() + 1);
+        a.rect(this.l.left - .5, this.l.top - .5, this.l.getWidth() + 1, this.l.getHeight() + 1);
         a.clip();
         a.fillStyle = b.Op;
-        a.font = b.Ib;
+        a.font = b.fontString;
         var d = !1;
-        var e = b.Bg;
+        var e = b.fontSize;
         var f = a.font;
         this.Ss(a, c);
         if (!0 === c.a.getConfiguration().AutoFontReductionActive &&
@@ -5760,10 +5760,10 @@ DrawText.prototype = {
         if (this.kt) {
             d = b.zl;
             var g = b.wl;
-            d.c = this.l.m;
-            d.f = this.l.o;
+            d.c = this.l.left;
+            d.f = this.l.top;
             this.nx && (g.c = d.c + 1, g.f = d.f);
-            d.c = this.l.m + this.Lx(a)
+            d.c = this.l.left + this.Lx(a)
         }!0 === c.a.getConfiguration().AutoFontReductionActive && !1 === this.fh && (b.ur(e), b.tr(f));
         a.restore()
     },
@@ -5772,13 +5772,13 @@ DrawText.prototype = {
             d, e;
         if (!0 === b.a.getConfiguration().AutoFontReductionActive && !1 === this.fh) {
             var f = a.font;
-            var g = c.Bg;
-            var h = this.l.w() + 1;
+            var g = c.fontSize;
+            var h = this.l.getWidth() + 1;
             var l =
-                this.l.v() + 1;
+                this.l.getHeight() + 1;
             for (d = !0;
-                (h > this.l.w() || l > this.l.v()) && 1 < g;) {
-                d || (--g, c.ur(g), c.tr(Util.Qh(f, g)), a.font = c.Ib);
+                (h > this.l.getWidth() || l > this.l.getHeight()) && 1 < g;) {
+                d || (--g, c.ur(g), c.tr(Util.Qh(f, g)), a.font = c.fontString);
                 this.Ke = this.ea;
                 this.dj && this.yp(a, b, !0, this.Ke);
                 if (this.Ni)
@@ -5825,7 +5825,7 @@ DrawText.prototype = {
     },
     yp: function(a, b, c, d) {
         var e = !1;
-        var f = this.l.T - this.l.m;
+        var f = this.l.right - this.l.left;
         this.Sl(a, d) > f && (e = !0, d = this.ay(a, d, f), !1 === c ? (this.ea = d, this.Bl(a, b)) : this.Ke = d);
         return e
     },
@@ -5881,11 +5881,11 @@ DrawText.prototype = {
         a.fillText(b, c.c, c.f)
     },
     bv: function(a, b) {
-        if (GeometryUtil.Ia(a, b, !1) <= this.l.w()) return b;
+        if (GeometryUtil.Ia(a, b, !1) <= this.l.getWidth()) return b;
         for (var c, d = 0, e = b.length - 1, f, g; 1 < e - d;) {
             f = Math.floor((d + e) / 2);
             c = b.substr(0, f) + "...";
-            g = GeometryUtil.Ia(a, c, !1) - this.l.w();
+            g = GeometryUtil.Ia(a, c, !1) - this.l.getWidth();
             if (0 === g) return c;
             0 > g ? (d = f, g = !1) : (e = f, g = !0)
         }
@@ -5895,21 +5895,21 @@ DrawText.prototype = {
         var c =
             this.lk(a);
         a.textBaseline = "top";
-        3 === this.Of ? c = new Point(c.c, this.l.o + this.l.v() / 2 - b / 2) : 2 === this.Of && (c = new Point(c.c, c.f - b));
+        3 === this.Of ? c = new Point(c.c, this.l.top + this.l.getHeight() / 2 - b / 2) : 2 === this.Of && (c = new Point(c.c, c.f - b));
         return c
     },
     Rs: function(a, b) {
-        this.dj && 3 === this.Of && this.l.v() < b && (this.Of = 1)
+        this.dj && 3 === this.Of && this.l.getHeight() < b && (this.Of = 1)
     },
     lk: function(a) {
         if (1 === this.yi) {
-            var b = this.l.m + 1;
+            var b = this.l.left + 1;
             a.textAlign = "left"
-        } else 3 === this.yi ? (b = this.l.m + this.l.w() / 2, a.textAlign = "center") : (b = this.l.T - 1, a.textAlign = "right");
+        } else 3 === this.yi ? (b = this.l.left + this.l.getWidth() / 2, a.textAlign = "center") : (b = this.l.right - 1, a.textAlign = "right");
         if (1 === this.Of) {
-            var c = this.l.o + 2;
+            var c = this.l.top + 2;
             a.textBaseline = "top"
-        } else 3 === this.Of ? (c = this.l.o + this.l.v() / 2, a.textBaseline = "middle") : (c = this.l.X - 1, a.textBaseline =
+        } else 3 === this.Of ? (c = this.l.top + this.l.getHeight() / 2, a.textBaseline = "middle") : (c = this.l.bottom - 1, a.textBaseline =
             "bottom");
         return new Point(b, c);
     },
@@ -5918,7 +5918,7 @@ DrawText.prototype = {
         var c, d = 0;
         if (3 === this.yi) {
             for (c = 0; c < b.length; ++c) d += b[c].Sm * GeometryUtil.Mc;
-            a.c = this.l.m + (this.l.w() - d + GeometryUtil.Mc) / 2
+            a.c = this.l.left + (this.l.getWidth() - d + GeometryUtil.Mc) / 2
         }
         return a
     },
@@ -5951,7 +5951,7 @@ var RectDrawVariant;
     var a = null;
     RectDrawVariant = function(b, c) {
         var d = c.getUint16();
-        this.ea = c.aa(d, 15 === b);
+        this.ea = c.readString(d, 15 === b);
         this.j = GeometryUtil.Lb(c);
         this.kp = 1 === (c.getUint32() & 1)
     };
@@ -5965,7 +5965,7 @@ var RectDrawVariant;
                 h = f.lineHeight,
                 l = new Size(6, 4);
             f = this.mt(b.fe(), g, l, b);
-            if (b.a.ba) this.ea = this.ea.replace(/(?:\r\n|\r|\n)/g, "<br>"), c = b.a.Tl, this.kp ? c.Uz(f.m, f.o, this.ea, b.a.getConfiguration().TooltipFont, "#ffffe1") : c.ty(this.ea, g, document.getElementById("background").width,
+            if (b.a.ba) this.ea = this.ea.replace(/(?:\r\n|\r|\n)/g, "<br>"), c = b.a.Tl, this.kp ? c.Uz(f.left, f.top, this.ea, b.a.getConfiguration().TooltipFont, "#ffffe1") : c.ty(this.ea, g, document.getElementById("background").width,
                 document.getElementById("background").height);
             else {
                 f = f.ac(.5, .5);
@@ -5976,10 +5976,10 @@ var RectDrawVariant;
                 c.lineWidth = 1;
                 c.strokeStyle = "#000000";
                 c.fillStyle = "#ffffe1";
-                c.fillRect(f.m, f.o, f.w(), f.v());
-                c.strokeRect(f.m, f.o, f.w(), f.v());
+                c.fillRect(f.left, f.top, f.getWidth(), f.getHeight());
+                c.strokeRect(f.left, f.top, f.getWidth(), f.getHeight());
                 c.fillStyle = "#000000";
-                e = new Point(f.m + l.O / 2, f.o + l.Z / 2);
+                e = new Point(f.left + l.width / 2, f.top + l.height / 2);
                 for (g = 0; g < d.length; ++g) c.fillText(d[g], e.c, e.f), e = new Point(e.c, e.f + h);
                 this.kp && (a = new Rectangle(0, 0, 0, 0));
                 null !== a && f.Yy(a) || this.ux(b.a, f);
@@ -5988,15 +5988,15 @@ var RectDrawVariant;
             }
         },
         ux: function(b, c) {
-            var d = new EventMessage(513, b.s.L, 0, 0),
+            var d = new EventMessage(513, b.sessionInfo.externId, 0, 0),
                 e = BinaryBuffer.b(8),
                 f = BinaryWriter.b(e, !0);
-            f.Db(Math.floor(c.m));
-            f.Db(Math.floor(c.o));
-            f.Db(Math.ceil(c.T));
-            f.Db(Math.ceil(c.X));
+            f.writeInt16(Math.floor(c.left));
+            f.writeInt16(Math.floor(c.top));
+            f.writeInt16(Math.ceil(c.right));
+            f.writeInt16(Math.ceil(c.bottom));
             d.$a(e);
-            b.Sa.push(d)
+            b.eventQueue.push(d)
         },
         lt: function(b, c, d) {
             var e = new Size(0, 0),
@@ -6006,11 +6006,11 @@ var RectDrawVariant;
             for (g = 0; g < d.length; ++g) {
                 0 === g && (h = Util.Mc(c.Xr) + 2);
                 var l = GeometryUtil.Ia(b, d[g], !1);
-                e.O = Math.max(e.O, l);
-                e.Z += h
+                e.width = Math.max(e.width, l);
+                e.height += h
             }
-            e.Z = Math.ceil(e.Z);
-            e.O = Math.ceil(e.O);
+            e.height = Math.ceil(e.height);
+            e.width = Math.ceil(e.width);
             b.font = f;
             return {
                 size: e,
@@ -6024,12 +6024,12 @@ var RectDrawVariant;
                 var h = document.getElementById("background").width;
                 e = e.a.U().ma().ha;
                 e = Util.lb(e, Util.ab());
-                h < 20 + c.O + e.c + this.j.c ? f = e.c + this.j.c - 20 - d.O - c.O : f = e.c + this.j.c + 20;
-                g = g < 20 + c.Z + e.f + this.j.f ? e.f + this.j.f - c.Z + 20 + d.O : e.f + this.j.f + 20
-            } else this.j.c + 20 + d.O + c.O >= b.w() ? f = this.j.c - 20 - d.O - c.O : f = this.j.c + 20, this.j.f + 20 + c.Z >= b.v() ? g = this.j.f - 20 - c.Z : g = this.j.f + 20;
-            0 > f && (f = c.O < b.w() ? (b.w() - c.O) / 2 : 0);
-            0 > g && (g = c.Z < b.v() ? (b.v() - c.Z) / 2 : 0);
-            return new Rectangle(f, g, f + c.O + d.O, g + d.Z + c.Z);
+                h < 20 + c.width + e.c + this.j.c ? f = e.c + this.j.c - 20 - d.width - c.width : f = e.c + this.j.c + 20;
+                g = g < 20 + c.height + e.f + this.j.f ? e.f + this.j.f - c.height + 20 + d.width : e.f + this.j.f + 20
+            } else this.j.c + 20 + d.width + c.width >= b.getWidth() ? f = this.j.c - 20 - d.width - c.width : f = this.j.c + 20, this.j.f + 20 + c.height >= b.getHeight() ? g = this.j.f - 20 - c.height : g = this.j.f + 20;
+            0 > f && (f = c.width < b.getWidth() ? (b.getWidth() - c.width) / 2 : 0);
+            0 > g && (g = c.height < b.getHeight() ? (b.getHeight() - c.height) / 2 : 0);
+            return new Rectangle(f, g, f + c.width + d.width, g + d.height + c.height);
         }
     }
 })();
@@ -6045,17 +6045,17 @@ UnknownCmd12 = function(a, b) {
 };
 UnknownCmd12.prototype = {
     h: function(a) {
-        this.Ht && a.a.Sc.close();
-        a.a.Sc.nA()
+        this.Ht && a.a.editControlManager.close();
+        a.a.editControlManager.nA()
     }
 };
 var UnknownCmd17;
 UnknownCmd17 = function(a, b, c) {
-    var d = b.S();
+    var d = b.getPosition();
     this.It = b.getUint16();
     a = b.getUint16();
-    this.Vn = b.aa(a, !1);
-    c >= b.S() - d + 10 ? (a = b.getUint16(), this.Wn = b.aa(a, !1)) : this.Wn = ""
+    this.Vn = b.readString(a, !1);
+    c >= b.getPosition() - d + 10 ? (a = b.getUint16(), this.Wn = b.readString(a, !1)) : this.Wn = ""
 };
 UnknownCmd17.prototype = {
     h: function() {
@@ -6094,10 +6094,10 @@ UnknownCmd69 = function(a, b, c, d) {
     c = 0;
     this.lc = b.getUint32();
     d = b.getUint16();
-    this.Yl = b.aa(d, !1);
+    this.Yl = b.readString(d, !1);
     d = b.getUint32();
     null === a.buffer && (a.buffer = BinaryBuffer.b(d));
-    for (; c < d;) a.buffer.oj(b.getUint8()), c++;
+    for (; c < d;) a.buffer.appendByte(b.getUint8()), c++;
     a.status.cc += d;
     0 !== (this.lc & 1) && (a.status.qc ? (a.status.qc = !1, a.status.Gc = !0) : a.status.Fc = !0);
     0 === d && (a.status.Fc = !0)
@@ -6110,9 +6110,9 @@ FileTransferCommand = function(a, b) {
     this.fx = b.getUint16();
     this.vg = b.getUint8();
     a = b.getUint16();
-    this.Rw = b.aa(a, !1);
+    this.Rw = b.readString(a, !1);
     a = b.getUint16();
-    0 < a ? this.Yl = b.aa(a, !1) : this.Yl = "";
+    0 < a ? this.Yl = b.readString(a, !1) : this.Yl = "";
     this.ni = new ProtocolDataPacket(b)
 };
 FileTransferCommand.prototype = {
@@ -6123,15 +6123,15 @@ FileTransferCommand.prototype = {
 };
 var ClearRect;
 ClearRect = function(a, b, c) {
-    a = b.S();
+    a = b.getPosition();
     this.l = GeometryUtil.A(b);
     this.Nn = !0;
-    c >= b.S() - a + 12 && (this.Nn = 0 === (b.getUint32() & 1))
+    c >= b.getPosition() - a + 12 && (this.Nn = 0 === (b.getUint32() & 1))
 };
 ClearRect.prototype = {
     h: function(a) {
         a.ti.cm(this.l);
-        this.Nn && (a.he().clearRect(this.l.m, this.l.o, this.l.w(), this.l.v()), Util.Rh(a, this.l));
+        this.Nn && (a.he().clearRect(this.l.left, this.l.top, this.l.getWidth(), this.l.getHeight()), Util.Rh(a, this.l));
         a.a.wc.Mj(this.l)
     }
 };
@@ -6141,7 +6141,7 @@ ExtensionMethodCall = function(a, b) {
     this.qo = b.getUint32();
     this.Fu = b.getUint32();
     a = b.getUint16();
-    this.Li = b.aa(a, !1);
+    this.Li = b.readString(a, !1);
     a = b.getUint32();
     var d = b.getUint16();
     this.Tg = [];
@@ -6169,8 +6169,8 @@ ExtensionMethodCall.prototype = {
         var c = BinaryBuffer.b(b),
             d = BinaryWriter.b(c, !0),
             e;
-        for (e = 0; e < b; ++e) d.va(a.getUint8());
-        return BinaryReader.b(c.Hc(), a.Se(), a.Ue());
+        for (e = 0; e < b; ++e) d.writeUint8(a.getUint8());
+        return BinaryReader.b(c.toArrayBuffer(), a.getByteOrder(), a.getTextDecoder());
     },
     xl: function(a, b, c) {
         a = this.vk(a, c);
@@ -6211,8 +6211,8 @@ ExtensionMethodCall.prototype = {
     },
     Lu: function(a, b) {
         var c = BinaryBuffer.b(this.El),
-            d = BinaryWriter.b(c, b.s.Ja, b.sh()),
-            e = new EventMessage(515, b.s.L, this.qo, this.Fu);
+            d = BinaryWriter.b(c, b.sessionInfo.isBigEndian, b.sh()),
+            e = new EventMessage(515, b.sessionInfo.externId, this.qo, this.Fu);
         try {
             this.Nu(a, d), e.$a(c)
         } catch (f) {
@@ -6225,43 +6225,43 @@ ExtensionMethodCall.prototype = {
         switch (this.bh) {
             case 0:
             case 1:
-                b.va(a ? 1 : 0);
+                b.writeUint8(a ? 1 : 0);
                 break;
             case 2:
             case 10:
-                b.va(a);
+                b.writeUint8(a);
                 break;
             case 6:
-                b.cq(a);
+                b.writeInt8(a);
                 break;
             case 3:
             case 11:
-                b.Wa(a);
+                b.writeUint16(a);
                 break;
             case 7:
-                b.Db(a);
+                b.writeInt16(a);
                 break;
             case 8:
-                b.bq(a);
+                b.writeInt32(a);
                 break;
             case 9:
                 throw new TypeError("Type LINT not supported");
             case 4:
             case 12:
-                b.B(a);
+                b.writeUint32(a);
                 break;
             case 5:
             case 13:
                 throw new TypeError("Type LWORD/ULINT not supported");
             case 14:
-                b.em(a);
+                b.writeFloat32(a);
                 break;
             case 15:
-                b.aq(a);
+                b.writeFloat64(a);
                 break;
             case 16:
             case 17:
-                b.Eb(a, 17 === this.bh);
+                b.writeString(a, 17 === this.bh);
                 break;
             default:
                 throw new TypeError("TypeCode + " +
@@ -6273,7 +6273,7 @@ var NativeControlCreate;
 NativeControlCreate = function(a, b) {
     this.Ae = b.getUint32();
     a = b.getUint16();
-    this.Yn = b.aa(a, !1);
+    this.Yn = b.readString(a, !1);
     this.rd = GeometryUtil.A(b)
 };
 NativeControlCreate.prototype = {
@@ -6285,8 +6285,8 @@ NativeControlCreate.prototype = {
                 var c = a.a.U().ma();
                 var d = c.ha;
                 "function" === typeof c.Cr && c.Cr(this.Ae);
-                this.rd = new Rectangle(0, 0, this.rd.T, this.rd.X, this.rd.ec)
-            } else d = a.Y.canvas;
+                this.rd = new Rectangle(0, 0, this.rd.right, this.rd.bottom, this.rd.transform)
+            } else d = a.offscreenContext.canvas;
             WebvisuExtensionMgr.Fy(b, this.Ae, this.rd, d);
             a.a.ba && (void 0 !== d.dn ? (a = d.dn, a.style.position = "absolute", a.style.width = "100%", a.style.height = "100%") : 2 == d.childNodes.length && (a = d.childNodes[1], a.style.position = "absolute",
                 a.style.width = "100%", a.style.height = "100%"))
@@ -6326,16 +6326,16 @@ FillRelatedState = function(a, b) {
     this.ft = 0 !== (d & 2);
     this.Bo = b.getUint16();
     var e = b.getUint16();
-    this.dv = b.aa(e, !1);
+    this.dv = b.readString(e, !1);
     this.Th = b.getUint16();
     var f = b.getUint16();
     e = BinaryBuffer.b(f);
     d = BinaryWriter.b(e, !0);
-    for (c = 0; c < f; ++c) d.va(b.getUint8());
+    for (c = 0; c < f; ++c) d.writeUint8(b.getUint8());
     this.Yh = this.Wd = !1;
     25 === a && (d = b.getUint16(), this.Wd = 0 !== (d & 1), this.Yh = 2 === (d & 2));
     a = f;
-    0 < a ? (this.Yh && (a /= 2), b = BinaryReader.b(e.Hc(), b.Se(), b.Ue()), this.So = b.aa(a, this.Yh)) : this.So = ""
+    0 < a ? (this.Yh && (a /= 2), b = BinaryReader.b(e.toArrayBuffer(), b.getByteOrder(), b.getTextDecoder()), this.So = b.readString(a, this.Yh)) : this.So = ""
 };
 FillRelatedState.prototype = {
     h: function(a) {
@@ -6352,15 +6352,15 @@ FillRelatedState.prototype = {
         b.style.fontSize = this.Bo + "px";
         this.Wv && (b.style.fontStyle = "italic");
         this.ft && (b.style.fontWeight = "bold");
-        a.a.Sc.open(b, this.Yh, a);
+        a.a.editControlManager.open(b, this.Yh, a);
         b.select()
     },
     ht: function() {
-        var a = this.pf.m + 3,
-            b = this.pf.T - 9,
+        var a = this.pf.left + 3,
+            b = this.pf.right - 9,
             c, d = Util.Mc(this.Bo);
         0 !== (this.Th &
-            8) ? c = this.pf.X - d - 9 : c = 0 !== (this.Th & 4) ? this.pf.o + (this.pf.v() - d) / 2 : this.pf.o + 1;
+            8) ? c = this.pf.bottom - d - 9 : c = 0 !== (this.Th & 4) ? this.pf.top + (this.pf.getHeight() - d) / 2 : this.pf.top + 1;
         return new Rectangle(a, c, b, c + d);
     }
 };
@@ -6609,7 +6609,7 @@ var GeometryUtil;
         return f
     };
     GeometryUtil.DB = function(d) {
-        return null !== d.ec
+        return null !== d.transform;
     };
     GeometryUtil.mg = function(d, e, f, g, h, l, r, v, u) {
         var x = GeometryUtil.fa(90),
@@ -6639,7 +6639,7 @@ UnknownCmd98 = function(a, b) {
     this.dw = b.getUint16();
     this.ew = b.getUint16();
     a = b.getUint16();
-    this.ea = b.aa(a, !1)
+    this.ea = b.readString(a, !1)
 };
 UnknownCmd98.prototype = {
     h: function() {
@@ -6756,7 +6756,7 @@ UnknownCmd24 = function(a, b) {
 };
 UnknownCmd24.prototype = {
     h: function(a) {
-        a.a.ba ? (a = a.a.U().ma(), null !== a && (a = a.ha, null !== a && (a.style.cursor = this.pb))) : a.Y.canvas.style.cursor = this.pb
+        a.a.ba ? (a = a.a.U().ma(), null !== a && (a = a.ha, null !== a && (a.style.cursor = this.pb))) : a.offscreenContext.canvas.style.cursor = this.pb
     }
 };
 var SetFillColor;
@@ -6777,12 +6777,12 @@ SetFont = function(a, b, c, d) {
     a = this.Fx(b.getUint32());
     this.Co = b.getUint16();
     c = b.getUint16();
-    b = b.aa(c, !1);
-    this.Ib = a + " " + this.Co + 'px "' + b + '"'
+    b = b.readString(c, !1);
+    this.fontString = a + " " + this.Co + 'px "' + b + '"'
 };
 SetFont.prototype = {
     h: function(a) {
-        a.getState().ZA(this.Ib, this.Co, this.Rc)
+        a.getState().ZA(this.fontString, this.Co, this.Rc)
     },
     Fx: function(a) {
         var b = [];
@@ -6830,11 +6830,11 @@ TouchHandlingFlags.prototype = {
 };
 var DrawDomImage;
 DrawDomImage = function(a, b, c) {
-    a = b.S();
+    a = b.getPosition();
     var d = b.getUint16();
-    var e = b.aa(d, !1);
+    var e = b.readString(d, !1);
     d = b.getUint16();
-    d = b.aa(d, !1);
+    d = b.readString(d, !1);
     "" !== e && (d = e + "." + d);
     this.Af = d;
     this.l = GeometryUtil.ad(b, !0);
@@ -6848,7 +6848,7 @@ DrawDomImage = function(a, b, c) {
     this.Xl = 0 !== (e & 1024);
     this.pk = 0 !== (e & 2048);
     this.Ag = !1;
-    c >= b.S() - a + 16 && (this.Ag = !0, this.Jk = b.getFloat32(), this.Kk = b.getFloat32());
+    c >= b.getPosition() - a + 16 && (this.Ag = !0, this.Jk = b.getFloat32(), this.Kk = b.getFloat32());
     this.xc = null
 };
 DrawDomImage.prototype = {
@@ -6866,7 +6866,7 @@ DrawDomImage.prototype = {
     },
     Vt: function(a) {
         var b = new Image;
-        b.src = a.Di.um(this.Af);
+        b.src = a.namespaceResolver.um(this.Af);
         Util.ad(b.src) && !a.a.getConfiguration().WorkaroundDisableSVGAspectRatioWorkaround && (b.src += "#svgView(preserveAspectRatio(none))");
         b.style.position = "absolute";
         b.style.msUserSelect = "none";
@@ -6883,7 +6883,7 @@ UnknownCmd49 = function(a, b, c, d) {
     var f = [];
     for (c = 0; c < a; ++c) {
         var g = b.getUint16();
-        f[c] = b.aa(g, !1)
+        f[c] = b.readString(g, !1)
     }
     this.wb = [];
     a = b.getUint16();
@@ -6896,14 +6896,14 @@ UnknownCmd49 = function(a, b, c, d) {
             br: b.getUint16()
         })
     }
-    d.Di.vA(this.wb)
+    d.namespaceResolver.vA(this.wb)
 };
 UnknownCmd49.prototype = {
     h: function() {}
 };
 var SetPenStyle;
 SetPenStyle = function(a, b, c, d) {
-    var e = b.S(),
+    var e = b.getPosition(),
         f = b.getUint32(),
         g = b.getUint32();
     a = b.getUint16();
@@ -6912,7 +6912,7 @@ SetPenStyle = function(a, b, c, d) {
     this.qd = f;
     !0 === d.a.getConfiguration().SemiTransparencyActive ? this.Rc = GeometryUtil.i(g) : this.Rc = GeometryUtil.b(g);
     this.ua = a;
-    c >= b.S() - e + 11 ? (c = b.getUint16(), this.fd = h[0], 0 !== (c & 0) && (this.fd = h[0]), 0 !== (c & 1) && (this.fd = h[1]), 0 !== (c & 2) && (this.fd = h[2]), c = b.getUint16(), this.gd = l[0], 0 !== (c & 0) && (this.gd = l[0]), 0 !== (c & 1) && (this.gd = l[1]), 0 !== (c & 2) && (this.gd = l[2]), b = b.getUint16(), d.a.getConfiguration().IecSupportsCommonMiterLimit ?
+    c >= b.getPosition() - e + 11 ? (c = b.getUint16(), this.fd = h[0], 0 !== (c & 0) && (this.fd = h[0]), 0 !== (c & 1) && (this.fd = h[1]), 0 !== (c & 2) && (this.fd = h[2]), c = b.getUint16(), this.gd = l[0], 0 !== (c & 0) && (this.gd = l[0]), 0 !== (c & 1) && (this.gd = l[1]), 0 !== (c & 2) && (this.gd = l[2]), b = b.getUint16(), d.a.getConfiguration().IecSupportsCommonMiterLimit ?
         this.Ed = b / 2 : this.Ed = 1 === b ? 1.7 * a : 2 * b) : (this.fd = h[0], this.gd = l[0], d.a.getConfiguration().IecSupportsCommonMiterLimit ? this.Ed = 1.5 : this.Ed = 1.7 * a)
 };
 SetPenStyle.prototype = {
@@ -6924,8 +6924,8 @@ var TouchRectangles;
 TouchRectangles = function(a, b, c) {
     this.sa = [];
     var d = null;
-    a = b.S();
-    for (var e, f; b.S() - a < c - 8;) e = b.getUint32(), e & 2147483648 ? (f = b.getUint32(), d = GeometryUtil.A(b), --d.X, --d.T, d = new InteractiveElement(f, d, e & 2147483647), this.sa.push(d)) : null !== d && (f = e & 65535, e = (e & 2147483647) >> 16, f = b.S() + f, this.Yw(b, d, e), b.seek(f))
+    a = b.getPosition();
+    for (var e, f; b.getPosition() - a < c - 8;) e = b.getUint32(), e & 2147483648 ? (f = b.getUint32(), d = GeometryUtil.A(b), --d.bottom, --d.right, d = new InteractiveElement(f, d, e & 2147483647), this.sa.push(d)) : null !== d && (f = e & 65535, e = (e & 2147483647) >> 16, f = b.getPosition() + f, this.Yw(b, d, e), b.seek(f))
 };
 TouchRectangles.prototype = {
     h: function(a) {
@@ -6997,7 +6997,7 @@ SetCornerRadius.prototype = {
 var InitVisualization;
 InitVisualization = function(a, b) {
     a = b.getUint16();
-    this.ea = b.aa(a, !1)
+    this.ea = b.readString(a, !1)
 };
 InitVisualization.prototype = {
     h: function(a) {
@@ -7098,7 +7098,7 @@ UnknownCmd81.prototype = {
 };
 var UnknownCmd80;
 UnknownCmd80 = function(a, b, c) {
-    a = b.S();
+    a = b.getPosition();
     this.Dc = b.getInt16();
     this.Ec = b.getInt16();
     this.ua = b.getInt16();
@@ -7106,7 +7106,7 @@ UnknownCmd80 = function(a, b, c) {
     this.rx = 0 !== b.getUint8();
     this.sx = 0 !== b.getUint8();
     this.Vs = b.getUint8();
-    c >= b.S() - a + 9 ? (this.Sn = b.getInt16(), this.Tn = b.getInt16(), this.Rn = b.getInt16(), this.Qn = b.getInt16()) : (this.Tn = this.Sn = 0, this.Qn = this.Rn = -1)
+    c >= b.getPosition() - a + 9 ? (this.Sn = b.getInt16(), this.Tn = b.getInt16(), this.Rn = b.getInt16(), this.Qn = b.getInt16()) : (this.Tn = this.Sn = 0, this.Qn = this.Rn = -1)
 };
 UnknownCmd80.prototype = {
     h: function(a) {
@@ -7330,7 +7330,7 @@ UnknownCmd88.prototype = {
             c = a.a.U().ma();
         c = c ? c.kz() : null;
         this.ut && (c = Util.ab().getBoundingClientRect(), this.Sg = !0, c = new Rectangle(c.x, c.y, c.x + c.width, c.y + c.height));
-        b.Jc(c, this.Sg, this.Oi, this.ri, a.Ea, this.j, this.Qv);
+        b.Jc(c, this.Sg, this.Oi, this.ri, a.visibleContext, this.j, this.Qv);
         a.a.openDialog(this.Ua, b)
     }
 };
@@ -7365,12 +7365,12 @@ var ProtocolDataPacket;
 ProtocolDataPacket = function(a) {
     var b = a.getUint16(),
         c;
-    a.aa(b, !1);
+    a.readString(b, !1);
     b = a.getUint16();
-    this.Iv = a.aa(b, !1);
+    this.Iv = a.readString(b, !1);
     this.Wk = a.getUint16();
     this.xn = [];
-    for (c = 0; c < this.Wk; ++c) b = a.getUint16(), this.xn[c] = a.aa(b, !1);
+    for (c = 0; c < this.Wk; ++c) b = a.getUint16(), this.xn[c] = a.readString(b, !1);
     this.lc = a.getUint32();
     a.getUint32()
 };
@@ -7408,7 +7408,7 @@ TransferStatus.b = 20;
 var UnknownCmd87;
 UnknownCmd87 = function(a, b) {
     a = b.getUint16();
-    this.Li = b.aa(a, !1);
+    this.Li = b.readString(a, !1);
     a = b.getUint16();
     this.Tg = [];
     for (var c = 0; c < a; ++c) {
@@ -7463,14 +7463,14 @@ UnknownCmd87.prototype = {
         var c = BinaryBuffer.b(b),
             d = BinaryWriter.b(c, !0),
             e;
-        for (e = 0; e < b; ++e) d.va(a.getUint8());
-        return BinaryReader.b(c.Hc(), a.Se(), a.Ue());
+        for (e = 0; e < b; ++e) d.writeUint8(a.getUint8());
+        return BinaryReader.b(c.toArrayBuffer(), a.getByteOrder(), a.getTextDecoder());
     }
 };
 var UnknownCmd86;
 UnknownCmd86 = function(a, b) {
     a = b.getUint16();
-    this.Ku = b.aa(a, !1)
+    this.Ku = b.readString(a, !1)
 };
 UnknownCmd86.prototype = {
     h: function(a) {
@@ -7495,12 +7495,12 @@ UnknownCmd21_22.prototype = {
 var ExtendedCmd8192;
 ExtendedCmd8192 = function(a, b) {
     a = b.getUint16();
-    this.Ig = b.aa(a, !1);
+    this.Ig = b.readString(a, !1);
     this.Vg = b.getUint16()
 };
 ExtendedCmd8192.prototype = {
     h: function(a) {
-        a = a.a.fb;
+        a = a.a.visuSession;
         null !== a && (a.NA(this.Ig), a.SA(this.Vg))
     }
 };
@@ -7510,17 +7510,17 @@ ExtendedCmd8194 = function(a, b) {
 };
 ExtendedCmd8194.prototype = {
     h: function(a) {
-        a.a.fb.rr(this.jw)
+        a.a.visuSession.rr(this.jw)
     }
 };
 var ExtendedCmd8193;
 ExtendedCmd8193 = function(a, b) {
     a = b.getUint16();
-    this.fj = b.aa(a, !1)
+    this.fj = b.readString(a, !1)
 };
 ExtendedCmd8193.prototype = {
     h: function(a) {
-        a = a.a.fb;
+        a = a.a.visuSession;
         null !== a && a.$A(this.fj)
     }
 };
@@ -7539,7 +7539,7 @@ UnknownCmd54.prototype = {
         c.fillStyle = "white";
         c.fillRect(0, 0, this.ua - 1, this.za - 1);
         this.jb & this.Lr && (b = Util.Ye(this.ua - 1, this.za - 1).getContext("2d"), b.fillStyle = "white", b.fillRect(0, 0, this.ua - 1, this.za - 1));
-        a.Cc.ky(this.Ab, new DoubleBuffer(c, b, new Size(this.ua, this.za)))
+        a.commandCache.ky(this.Ab, new DoubleBuffer(c, b, new Size(this.ua, this.za)))
     }
 };
 var UnknownCmd55;
@@ -7548,7 +7548,7 @@ UnknownCmd55 = function(a, b) {
 };
 UnknownCmd55.prototype = {
     h: function(a) {
-        a.Cc.jA(this.Ab);
+        a.commandCache.jA(this.Ab);
         a.a.W.sa.vz(this.Ab)
     }
 };
@@ -7573,7 +7573,7 @@ UnknownCmd56 = function(a, b) {
 };
 UnknownCmd56.prototype = {
     h: function(a) {
-        a.Cc.Yz(this.Ab)
+        a.commandCache.Yz(this.Ab)
     }
 };
 var UnknownCmd57;
@@ -7582,23 +7582,23 @@ UnknownCmd57 = function(a, b) {
 };
 UnknownCmd57.prototype = {
     h: function(a) {
-        var b = a.Cc.Nj(a.Cc.bm());
-        !b.Cf && a.Ie && b.ei.drawImage(b.Ea.canvas, 0, 0);
+        var b = a.commandCache.Nj(a.commandCache.bm());
+        !b.Cf && a.Ie && b.ei.drawImage(b.visibleContext.canvas, 0, 0);
         b.Cf || a.Ie || b.LA(!0);
-        a.Cc.Wz()
+        a.commandCache.Wz()
     }
 };
 var UnknownCmd53;
 UnknownCmd53 = function() {};
 UnknownCmd53.prototype = {
     h: function(a) {
-        var b = a.a.Sa,
+        var b = a.a.eventQueue,
             c = a.Rl,
             d;
         var e = BinaryBuffer.b(2 * c.count());
-        var f = BinaryWriter.b(e, a.a.s.Ja);
-        for (d = 0; d < c.count(); ++d) f.Db(c.lz(d));
-        a = new EventMessage(519, a.a.s.L, 0, 0);
+        var f = BinaryWriter.b(e, a.a.sessionInfo.isBigEndian);
+        for (d = 0; d < c.count(); ++d) f.writeInt16(c.lz(d));
+        a = new EventMessage(519, a.a.sessionInfo.externId, 0, 0);
         a.$a(e);
         b.push(a)
     }
@@ -7607,13 +7607,13 @@ var UnknownCmd35;
 UnknownCmd35 = function() {};
 UnknownCmd35.prototype = {
     h: function(a) {
-        var b = a.a.Sa,
+        var b = a.a.eventQueue,
             c = a.ej,
             d;
         var e = BinaryBuffer.b(4 * c.count());
-        var f = BinaryWriter.b(e, a.a.s.Ja);
-        for (d = 0; d < c.count(); ++d) f.Db(c.w(d)), f.Db(c.v(d));
-        a = new EventMessage(518, a.a.s.L, 0, 0);
+        var f = BinaryWriter.b(e, a.a.sessionInfo.isBigEndian);
+        for (d = 0; d < c.count(); ++d) f.writeInt16(c.getWidth(d)), f.writeInt16(c.getHeight(d));
+        a = new EventMessage(518, a.a.sessionInfo.externId, 0, 0);
         a.$a(e);
         b.push(a)
     }
@@ -7621,22 +7621,22 @@ UnknownCmd35.prototype = {
 var UnknownCmd51_52;
 UnknownCmd51_52 = function(a, b) {
     var c = b.getUint16();
-    this.ea = b.aa(c, 52 === a)
+    this.ea = b.readString(c, 52 === a)
 };
 UnknownCmd51_52.prototype = {
     h: function(a) {
-        a.getContext().font = a.getState().Ib;
+        a.getContext().font = a.getState().fontString;
         a.Rl.jy(this.ea)
     }
 };
 var UnknownCmd33_34;
 UnknownCmd33_34 = function(a, b) {
     var c = b.getUint16();
-    this.ea = b.aa(c, 34 === a)
+    this.ea = b.readString(c, 34 === a)
 };
 UnknownCmd33_34.prototype = {
     h: function(a) {
-        a.getContext().font = a.getState().Ib;
+        a.getContext().font = a.getState().fontString;
         a.ej.Yp(this.ea)
     }
 };
@@ -7668,14 +7668,14 @@ FontTextCommand = function(a, b) {
 };
 FontTextCommand.prototype = {
     h: function(a) {
-        a.getContext().font = a.getState().Ib;
+        a.getContext().font = a.getState().fontString;
         a.ej.Yp(this.ea, this.bt, this.Kx)
     }
 };
 var UnknownCmd71;
 UnknownCmd71 = function(a, b, c) {
     var d = b.getUint16();
-    this.ea = b.aa(d, !1);
+    this.ea = b.readString(d, !1);
     FontTextCommand.call(this, a, b, c)
 };
 UnknownCmd71.prototype = Object.create(FontTextCommand.prototype);
@@ -7683,7 +7683,7 @@ UnknownCmd71.prototype.constructor = UnknownCmd71;
 var UnknownCmd72;
 UnknownCmd72 = function(a, b, c) {
     var d = b.getUint16();
-    this.ea = b.aa(d, !0);
+    this.ea = b.readString(d, !0);
     FontTextCommand.call(this, a, b, c)
 };
 UnknownCmd72.prototype = Object.create(FontTextCommand.prototype);
@@ -7734,7 +7734,7 @@ CheckDemoModeState.prototype = {
     },
     hb: function(a) {
         a = (new ResponseParser(a, !0, this.a.ya())).i();
-        a instanceof SessionInfo ? (this.a.s.Hh = a.Hh, this.a.I(this.yb, 0)) : this.a.error("Checking for demo mode failed (1): " + a)
+        a instanceof SessionInfo ? (this.a.sessionInfo.isDemoMode = a.isDemoMode, this.a.I(this.yb, 0)) : this.a.error("Checking for demo mode failed (1): " + a)
     },
     gm: function() {
         return !1
@@ -7796,7 +7796,7 @@ DeviceLoginState.prototype = {
         0 === this.cj ? this.ix(a) : this.jx(a)
     },
     ix: function(a) {
-        var b = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).A(this.jc.Ad, this.Cb);
+        var b = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).A(this.jc.Ad, this.Cb);
         if (b instanceof CryptChallengeResponse)
             if (2 === this.jc.Ad) {
                 var c = this;
@@ -7827,8 +7827,8 @@ DeviceLoginState.prototype = {
             b)
     },
     jx: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).R();
-        a instanceof LoginResult ? a.tc === ProtocolConstants.b ? (this.Cb || (Logger.b("Successfully Logged in! DeviceSessionId: " + a.se), this.a.s.bg = a.se), this.a.I(new VisuRegistrationState(this.a), 0)) : 25 === a.tc ? (Logger.b("DeviceLogin failed with the following error: NO_ACCESS_RIGHTS"), this.a.I(new QueryCredentialsState(this.a, this.jc, this.Cb), 0)) : this.H("DeviceLogin failed with the following error: " + a.tc) : this.H("DeviceLogin failed with the following error: " + a.tc)
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).R();
+        a instanceof LoginResult ? a.tc === ProtocolConstants.b ? (this.Cb || (Logger.b("Successfully Logged in! DeviceSessionId: " + a.deviceSessionId), this.a.sessionInfo.defaultClientId = a.deviceSessionId), this.a.I(new VisuRegistrationState(this.a), 0)) : 25 === a.tc ? (Logger.b("DeviceLogin failed with the following error: NO_ACCESS_RIGHTS"), this.a.I(new QueryCredentialsState(this.a, this.jc, this.Cb), 0)) : this.H("DeviceLogin failed with the following error: " + a.tc) : this.H("DeviceLogin failed with the following error: " + a.tc)
     },
     H: function(a) {
         this.a.error("Login to the plc device failed: " +
@@ -7854,12 +7854,12 @@ DeviceSessionState.prototype = {
         a.Za(b.Oa(), this)
     },
     hb: function(a) {
-        null !== a || this.kx ? (a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).fa(this.Cb), a instanceof DeviceSessionResult ? this.Cb ? a.tc === ProtocolConstants.b ? (this.Cp(a.se), a.Error === ProtocolConstants.b || 18 === a.Error ? this.a.I(new DeviceLoginState(this.a, "", "", this.Cb, 0, a), 0) : this.H("DeviceSessionCreate failed with the following error: " + a.tc + " " + a.Error)) : this.H("DeviceSessionCreate failed with the following error: " + a.tc) : a.tc === ProtocolConstants.b && a.Ad === ProtocolConstants.A ? (this.Cp(a.se),
+        null !== a || this.kx ? (a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).fa(this.Cb), a instanceof DeviceSessionResult ? this.Cb ? a.tc === ProtocolConstants.b ? (this.Cp(a.deviceSessionId), a.Error === ProtocolConstants.b || 18 === a.Error ? this.a.I(new DeviceLoginState(this.a, "", "", this.Cb, 0, a), 0) : this.H("DeviceSessionCreate failed with the following error: " + a.tc + " " + a.Error)) : this.H("DeviceSessionCreate failed with the following error: " + a.tc) : a.tc === ProtocolConstants.b && a.Ad === ProtocolConstants.A ? (this.Cp(a.deviceSessionId),
             this.a.I(new VisuRegistrationState(this.a), 0)) : (Logger.b("Login failed. Probably credentials necessary; result: " + a.tc), this.a.I(new QueryCredentialsState(this.a, a, this.Cb), 0)) : this.H("DeviceSessionCreate failed with the following error: " + a)) : this.a.I(new DeviceSessionState(this.a, !1, !0), 0)
     },
     Cp: function(a) {
         Logger.b("Successfully Logged in! DeviceSessionId: " + a);
-        this.a.s.bg = a
+        this.a.sessionInfo.defaultClientId = a
     },
     Tf: function() {
         return this.Cb
@@ -7946,7 +7946,7 @@ QueryCredentialsState.prototype = {
     },
     Ln: function(a, b) {
         var c = this.a.Da().fe();
-        return new Point((c.m + c.T - a) / 2, (c.o + c.X - b) / 2);
+        return new Point((c.left + c.right - a) / 2, (c.top + c.bottom - b) / 2);
     },
     Un: function(a) {
         window.document.body.removeChild(a)
@@ -8201,11 +8201,11 @@ RetrievingMyIpState.prototype = {
         return !0
     },
     hb: function(a) {
-        null !== a && (a = (new ResponseParser(a, !0, this.a.ya())).pa(), "" !== a && (this.a.s.fk = a));
+        null !== a && (a = (new ResponseParser(a, !0, this.a.ya())).pa(), "" !== a && (this.a.sessionInfo.applicationName = a));
         this.a.I(this.eu(), 0)
     },
     eu: function() {
-        if (this.a.s.Cs) {
+        if (this.a.sessionInfo.supportsPost) {
             if (0 === this.a.getConfiguration().PostDataInHeader) return new DerivingPostMethodState(this.a);
             1 === this.a.getConfiguration().PostDataInHeader && (Logger.info("POST-Data in header active by override"), this.a.Fr(!0))
         }
@@ -8235,7 +8235,7 @@ StartConnectState.prototype = {
         return !0
     },
     hb: function(a) {
-        null === a ? this.a.I(this, this.a.getConfiguration().PollingRegistrationInterval) : (a = (new ResponseParser(a, !0, this.a.ya())).i(), a instanceof SessionInfo ? (Logger.b("Successfully connected! SessionId: " + a.se + " IntelByteOrder: " + a.Ja), this.a.wA(a), this.a.Ac ? this.a.I(new VisuRegistrationState(this.a), 0) : this.a.I(new RetrievingMyIpState(this.a), 0)) : this.a.error("Connection failed: " +
+        null === a ? this.a.I(this, this.a.getConfiguration().PollingRegistrationInterval) : (a = (new ResponseParser(a, !0, this.a.ya())).i(), a instanceof SessionInfo ? (Logger.b("Successfully connected! SessionId: " + a.deviceSessionId + " IntelByteOrder: " + a.isBigEndian), this.a.wA(a), this.a.Ac ? this.a.I(new VisuRegistrationState(this.a), 0) : this.a.I(new RetrievingMyIpState(this.a), 0)) : this.a.error("Connection failed: " +
             a))
     },
     H: function(a) {
@@ -8257,7 +8257,7 @@ UploadImagePoolState.prototype = {
     },
     Cj: function(a) {
         try {
-            this.a.Da().Di.fill(a)
+            this.a.Da().namespaceResolver.fill(a)
         } catch (b) {
             this.Kg(b)
         }
@@ -8297,11 +8297,11 @@ VisuFileTransferState.prototype = {
             if (this.g.status.mb === TransferStatus.R) {
                 var b = EventType.fa;
                 3 === this.g.direction && (b = EventType.R);
-                b = new EventMessage(b, this.a.s.L, 0, 1);
+                b = new EventMessage(b, this.a.sessionInfo.externId, 0, 1);
                 this.a.$f(null);
                 this.a.I(this.yb, 0);
-                this.a.Sa.push(b)
-            } else if (this.g.status.mb === TransferStatus.b) 3 !== this.g.direction && (b = this.Tt(this.g)), this.a.$f(null), this.a.I(this.yb, 0), 3 !== this.g.direction && this.a.Sa.push(b);
+                this.a.eventQueue.push(b)
+            } else if (this.g.status.mb === TransferStatus.b) 3 !== this.g.direction && (b = this.Tt(this.g)), this.a.$f(null), this.a.I(this.yb, 0), 3 !== this.g.direction && this.a.eventQueue.push(b);
             else if (1 !== this.g.direction &&
                 0 !== this.g.direction || this.g.status.result === ProtocolConstants.b && !this.g.status.Fc || this.g.status.mb === TransferStatus.fa) {
                 if (1 === this.g.direction || 3 === this.g.direction) {
@@ -8322,9 +8322,9 @@ VisuFileTransferState.prototype = {
                         }
                     } else if (this.g.status.qc || this.g.status.Gc) {
                         null !== this.g.ub && (window.document.body.removeChild(this.g.ub), this.g.ub = null);
-                        this.g.status.qc ? (this.Er(this.g), b = this.St(this.g), this.g.status.qc = !1, this.g.status.Gc = !0, this.a.Sa.push(b), b = new EventMessage(532, this.a.s.L, this.g.buffer.size(), 0)) : b = this.Rt(this.g);
+                        this.g.status.qc ? (this.Er(this.g), b = this.St(this.g), this.g.status.qc = !1, this.g.status.Gc = !0, this.a.eventQueue.push(b), b = new EventMessage(532, this.a.sessionInfo.externId, this.g.buffer.size(), 0)) : b = this.Rt(this.g);
                         this.a.I(this.yb, 0);
-                        this.a.Sa.push(b);
+                        this.a.eventQueue.push(b);
                         this.g.lr = Util.b();
                         return
                     }
@@ -8342,7 +8342,7 @@ VisuFileTransferState.prototype = {
                         this.g.status.yd = !1;
                         b = this.Qt(this.g);
                         this.a.I(this.yb, 0);
-                        this.a.Sa.push(b);
+                        this.a.eventQueue.push(b);
                         return
                     }
                     if (this.g.status.Fc && this.g.status.mb !== TransferStatus.b) {
@@ -8358,9 +8358,9 @@ VisuFileTransferState.prototype = {
     },
     hb: function(a) {
         var b = !1;
-        null !== a || 0 !== this.g.direction && 1 !== this.g.direction ? (a = new ResponseParser(a, this.a.s.Ja, this.a.ya()), this.g.status.Fc && this.g.status.mb !== TransferStatus.b ? (a.bA(this.g), this.a.I(this.yb, 0), this.jr(this.g)) : (0 === this.g.direction ? this.g.status.yd ? (this.g.status.yd = !1, a.Cm(this.g), this.g.status.result === ProtocolConstants.b && (this.g.status.Gc = b = !0)) : this.g.status.Gc && a.dr(this.g) : this.g.status.mb === TransferStatus.i ? (this.g.status.yd = !1, a.Cm(this.g), this.g.status.result === ProtocolConstants.b && 0 < this.g.ff.Lc ? (null !== this.g.ub && window.document.body.removeChild(this.g.ub),
-            this.g.status.mb = TransferStatus.pa, this.Ew(this.g)) : (this.g.status.result = 0, this.g.status.mb = TransferStatus.A, this.g.status.qc = !0, this.g.Gb.lc = this.g.Gb.lc & -5, this.g.Gb.lc &= -9)) : this.g.status.qc ? (a.Cm(this.g), this.g.status.qc = !1, this.g.status.result === ProtocolConstants.b && (this.g.status.Gc = b = !0)) : this.g.status.Gc && a.dr(this.g), this.a.I(this.yb, 0), b && (b = new EventMessage(EventType.fa, this.a.s.L, this.g.Rm, this.g.status.result), this.a.Sa.push(b), 1 === this.g.direction && (null !== this.g.ub && window.document.body.removeChild(this.g.ub), this.g.ub = null)))) : (null !== this.g.ub &&
-            (window.document.body.removeChild(this.g.ub), this.g.ub = null), b = new EventMessage(528, this.a.s.L, this.g.Rm, 7), this.a.$f(null), this.a.I(this.yb, 0), this.a.Sa.push(b))
+        null !== a || 0 !== this.g.direction && 1 !== this.g.direction ? (a = new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya()), this.g.status.Fc && this.g.status.mb !== TransferStatus.b ? (a.readFinishTransferResult(this.g), this.a.I(this.yb, 0), this.jr(this.g)) : (0 === this.g.direction ? this.g.status.yd ? (this.g.status.yd = !1, a.Cm(this.g), this.g.status.result === ProtocolConstants.b && (this.g.status.Gc = b = !0)) : this.g.status.Gc && a.dr(this.g) : this.g.status.mb === TransferStatus.i ? (this.g.status.yd = !1, a.Cm(this.g), this.g.status.result === ProtocolConstants.b && 0 < this.g.ff.Lc ? (null !== this.g.ub && window.document.body.removeChild(this.g.ub),
+            this.g.status.mb = TransferStatus.pa, this.Ew(this.g)) : (this.g.status.result = 0, this.g.status.mb = TransferStatus.A, this.g.status.qc = !0, this.g.Gb.lc = this.g.Gb.lc & -5, this.g.Gb.lc &= -9)) : this.g.status.qc ? (a.Cm(this.g), this.g.status.qc = !1, this.g.status.result === ProtocolConstants.b && (this.g.status.Gc = b = !0)) : this.g.status.Gc && a.dr(this.g), this.a.I(this.yb, 0), b && (b = new EventMessage(EventType.fa, this.a.sessionInfo.externId, this.g.Rm, this.g.status.result), this.a.eventQueue.push(b), 1 === this.g.direction && (null !== this.g.ub && window.document.body.removeChild(this.g.ub), this.g.ub = null)))) : (null !== this.g.ub &&
+            (window.document.body.removeChild(this.g.ub), this.g.ub = null), b = new EventMessage(528, this.a.sessionInfo.externId, this.g.Rm, 7), this.a.$f(null), this.a.I(this.yb, 0), this.a.eventQueue.push(b))
     },
     Tf: function() {
         return !0
@@ -8378,7 +8378,7 @@ VisuFileTransferState.prototype = {
     jr: function(a) {
         var b = null,
             c = this.Ny();
-        null === a.buffer || 0 !== a.direction && 2 !== a.direction || (b = a.buffer.Hc());
+        null === a.buffer || 0 !== a.direction && 2 !== a.direction || (b = a.buffer.toArrayBuffer());
         null !== this.g.ub &&
             window.document.body.removeChild(a.ub);
         a.status.mb = TransferStatus.b;
@@ -8513,12 +8513,12 @@ VisuFileTransferState.prototype = {
     },
     ww: function(a) {
         var b = this.a.g;
-        b.buffer = BinaryReader.b(a.target.result, this.a.s.Ja, this.a.ya());
+        b.buffer = BinaryReader.b(a.target.result, this.a.sessionInfo.isBigEndian, this.a.ya());
         b.status.qc = !0
     },
     Ln: function(a, b) {
         var c = this.a.Da().fe();
-        return new Point((c.m + c.T - a) / 2, (c.o + c.X - b) / 2);
+        return new Point((c.left + c.right - a) / 2, (c.top + c.bottom - b) / 2);
     },
     Hf: function(a) {
         var b = this.a.g;
@@ -8531,45 +8531,45 @@ VisuFileTransferState.prototype = {
         this.g.ub = null
     },
     Tt: function(a) {
-        var b = this.a.s.CommBufferSize - 2E3,
+        var b = this.a.sessionInfo.CommBufferSize - 2E3,
             c = BinaryBuffer.b(b + 4),
             d = BinaryWriter.b(c, !0);
         b = a.Kc.length;
-        d.Eb(a.Kc, !1);
-        a = new EventMessage(528, this.a.s.L, a.Rm, a.status.result);
+        d.writeString(a.Kc, !1);
+        a = new EventMessage(528, this.a.sessionInfo.externId, a.Rm, a.status.result);
         0 < b && a.$a(c);
         return a
     },
     Rt: function(a) {
         var b = 0;
-        var c = this.a.s.CommBufferSize - 2E3,
+        var c = this.a.sessionInfo.CommBufferSize - 2E3,
             d = BinaryBuffer.b(c + 4),
             e = BinaryWriter.b(d, !0),
             f;
         a.buffer.size() - a.status.Ve < c && (c = a.buffer.size() - a.status.Ve, a.status.mb = TransferStatus.b, b = 1);
-        e.B(c);
-        for (f = 0; f < c; f++) e.va(a.buffer.getUint8());
-        b = new EventMessage(530, this.a.s.L, b, 0);
+        e.writeUint32(c);
+        for (f = 0; f < c; f++) e.writeUint8(a.buffer.getUint8());
+        b = new EventMessage(530, this.a.sessionInfo.externId, b, 0);
         b.$a(d);
         a.status.Ve += c;
         return b
     },
     St: function(a) {
-        var b = this.a.s.CommBufferSize -
+        var b = this.a.sessionInfo.CommBufferSize -
             2E3,
             c = BinaryBuffer.b(b + 4),
             d = BinaryWriter.b(c, !0);
         b = a.Kc.length;
-        d.B(b);
-        d.Eb(a.Kc, !1);
-        a = new EventMessage(530, this.a.s.L, 2, 0);
+        d.writeUint32(b);
+        d.writeString(a.Kc, !1);
+        a = new EventMessage(530, this.a.sessionInfo.externId, 2, 0);
         a.$a(c);
         return a
     },
     Qt: function(a) {
         var b = BinaryBuffer.b(20);
-        BinaryWriter.b(b, !0).Eb("DummyFileName", !1);
-        var c = new EventMessage(EventType.R, this.a.s.L, 0, 0);
+        BinaryWriter.b(b, !0).writeString("DummyFileName", !1);
+        var c = new EventMessage(EventType.R, this.a.sessionInfo.externId, 0, 0);
         c.$a(b);
         a.status.qc = !0;
         return c
@@ -8584,19 +8584,19 @@ VisuRedundancyInitState.prototype = {
     h: function() {
         var a = this.a.Ga(),
             b = this.a.Na(),
-            c = new EventMessage(3145728, this.a.s.L, 0, 0),
+            c = new EventMessage(3145728, this.a.sessionInfo.externId, 0, 0),
             d = BinaryBuffer.b(32),
             e = BinaryWriter.b(d, !0);
-        e.B(1);
-        e.Eb(this.fj, !1);
+        e.writeUint32(1);
+        e.writeString(this.fj, !1);
         c.$a(d);
         b.ag(c);
         a.Za(b.Oa(), this);
         Logger.i("Redundancy, request for the ID with ticket:" + this.fj)
     },
     hb: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).b(null);
-        a instanceof PaintData ? a.je() ? (this.a.fb.rr(ProtocolConstants.i), this.a.fb.on = Util.b(), this.a.I(new VisuOnlineInitState1(this.a), 0)) : this.H("Unexpected paint result in " + this.className()) : this.H(a)
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).b(null);
+        a instanceof PaintData ? a.je() ? (this.a.visuSession.rr(ProtocolConstants.i), this.a.visuSession.on = Util.b(), this.a.I(new VisuOnlineInitState1(this.a), 0)) : this.H("Unexpected paint result in " + this.className()) : this.H(a)
     },
     H: function(a) {
         this.a.error("Error during redundancy initializing (1) the visualization: " +
@@ -8614,16 +8614,16 @@ VisuOnlineInitState1.prototype = {
     h: function() {
         var a = this.a.Ga(),
             b = this.a.Na(),
-            c = new EventMessage(1048576, this.a.s.L, 0, 0);
+            c = new EventMessage(1048576, this.a.sessionInfo.externId, 0, 0);
         b.ag(c);
         a.Za(b.Oa(), this)
     },
     hb: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).b(null);
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).b(null);
         var b = this;
-        a instanceof PaintData ? a.je() ? (this.a.fb.$j = !0, this.a.Da().Cq(a, function() {
-            var c = b.a.fb;
-            c.Dh === ProtocolConstants.i ? 7E3 > Util.b() - c.on ? b.a.I(b, 10) : b.H("Timeout on receiving command in " + b.className()) : (Logger.i("Redundancy, ID to use, ID :" + c.Dh), Logger.i("Redundancy, ID to remove, ID :" + b.a.s.L), c.bk = b.a.s.L, b.a.s.L = c.Dh, c.$j = !1, b.a.I(new VisuOnlineInitState2(b.a),
+        a instanceof PaintData ? a.je() ? (this.a.visuSession.$j = !0, this.a.Da().Cq(a, function() {
+            var c = b.a.visuSession;
+            c.Dh === ProtocolConstants.i ? 7E3 > Util.b() - c.on ? b.a.I(b, 10) : b.H("Timeout on receiving command in " + b.className()) : (Logger.i("Redundancy, ID to use, ID :" + c.Dh), Logger.i("Redundancy, ID to remove, ID :" + b.a.sessionInfo.externId), c.bk = b.a.sessionInfo.externId, b.a.sessionInfo.externId = c.Dh, c.$j = !1, b.a.I(new VisuOnlineInitState2(b.a),
                 0))
         })) : this.H("Unexpected paint result in " + this.className()) : this.H(a)
     },
@@ -8642,12 +8642,12 @@ VisuOnlineInitState2.prototype = {
     h: function() {
         var a = this.a.Ga(),
             b = this.a.Na();
-        b.Qm(this.a.fb.bk);
+        b.Qm(this.a.visuSession.bk);
         a.Za(b.Oa(), this)
     },
     hb: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).Lb();
-        0 === a ? (Logger.i("Redundancy, Client removed:" + this.a.fb.bk), Logger.b("Start normal machine state after redundancy switchover, ID: " + this.a.s.L), this.a.I(new VisuOnlineInitState3(this.a), 0)) : this.H(a)
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).Lb();
+        0 === a ? (Logger.i("Redundancy, Client removed:" + this.a.visuSession.bk), Logger.b("Start normal machine state after redundancy switchover, ID: " + this.a.sessionInfo.externId), this.a.I(new VisuOnlineInitState3(this.a), 0)) : this.H(a)
     },
     H: function(a) {
         this.a.error("Error during redundancy initializing (3) the visualization: " + a)
@@ -8664,13 +8664,13 @@ VisuOnlineInitState3.prototype = {
     h: function() {
         var a = this.a.Ga(),
             b = this.a.Na(),
-            c = EventMessage.R(this.a.s.L, this.a.getConfiguration().BestFit, this.a.getConfiguration().BestFitForDialogs, this.a.getConfiguration().ScaleTypeIsotropic, this.a.Da().fe(), this.a.Da().Ak);
+            c = EventMessage.R(this.a.sessionInfo.externId, this.a.getConfiguration().BestFit, this.a.getConfiguration().BestFitForDialogs, this.a.getConfiguration().ScaleTypeIsotropic, this.a.Da().fe(), this.a.Da().Ak);
         b.ag(c);
         a.Za(b.Oa(), this)
     },
     hb: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).b(null);
-        a instanceof PaintData ? !a.je() || 0 < a.Jd ? this.H("Unexpected paint result in " + this.className()) : this.a.I(new VisuOnlineInitState2b(this.a), 0) : this.H(a)
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).b(null);
+        a instanceof PaintData ? !a.je() || 0 < a.commandCount ? this.H("Unexpected paint result in " + this.className()) : this.a.I(new VisuOnlineInitState2b(this.a), 0) : this.H(a)
     },
     H: function(a) {
         this.a.error("Error during initializing (1) the visualization: " + a)
@@ -8687,23 +8687,23 @@ VisuOnlineInitState2b.prototype = {
     h: function() {
         var a = this.a.Ga(),
             b = this.a.Na(),
-            c = new EventMessage(1048576, this.a.s.L, 0, 0),
+            c = new EventMessage(1048576, this.a.sessionInfo.externId, 0, 0),
             d = BinaryBuffer.b(16),
             e = BinaryWriter.b(d, !0),
             f = this.a.getConfiguration();
-        e.B(458752);
-        e.B(7);
+        e.writeUint32(458752);
+        e.writeUint32(7);
         var g = 0;
         !0 === f.HasKeyboard && (g |= 24);
         f.TouchHandlingActive && (g |= 3);
-        e.B(g);
+        e.writeUint32(g);
         c.$a(d);
         b.ag(c);
         a.Za(b.Oa(), this)
     },
     hb: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).b(null);
-        a instanceof PaintData ? !a.je() || 0 < a.Jd ? this.H("Unexpected paint result in " + this.className() + ", complete: " + a.je() + ", commands: " + a.Jd) : this.a.I(new VisuOnlineInitState4(this.a), 0) : this.H(a)
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).b(null);
+        a instanceof PaintData ? !a.je() || 0 < a.commandCount ? this.H("Unexpected paint result in " + this.className() + ", complete: " + a.je() + ", commands: " + a.commandCount) : this.a.I(new VisuOnlineInitState4(this.a), 0) : this.H(a)
     },
     H: function(a) {
         this.a.error("Error during initializing (2) the visualization: " +
@@ -8721,17 +8721,17 @@ VisuOnlineInitState4.prototype = {
     h: function() {
         var a = this.a.Ga(),
             b = this.a.Na(),
-            c = new EventMessage(1048576, this.a.s.L, 0, 0),
+            c = new EventMessage(1048576, this.a.sessionInfo.externId, 0, 0),
             d = BinaryBuffer.b(32),
             e = BinaryWriter.b(d, !0);
-        !1 === this.a.fb.Lh ? (e.B(1), e.Eb(this.a.getConfiguration().StartVisu, !1)) : (e.B(2), e.va(0));
+        !1 === this.a.visuSession.Lh ? (e.writeUint32(1), e.writeString(this.a.getConfiguration().StartVisu, !1)) : (e.writeUint32(2), e.writeUint8(0));
         c.$a(d);
         b.ag(c);
         a.Za(b.Oa(), this)
     },
     hb: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).b(null);
-        a instanceof PaintData ? !a.je() || 0 < a.Jd ? this.H("Unexpected paint result in " + this.className() + ", complete: " + a.je() + ", commands: " + a.Jd) : (!0 === this.a.fb.Lh && (this.a.fb.Lh = !1, "TRACE" !== this.a.getConfiguration().LogLevel &&
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).b(null);
+        a instanceof PaintData ? !a.je() || 0 < a.commandCount ? this.H("Unexpected paint result in " + this.className() + ", complete: " + a.je() + ", commands: " + a.commandCount) : (!0 === this.a.visuSession.Lh && (this.a.visuSession.Lh = !1, "TRACE" !== this.a.getConfiguration().LogLevel &&
             (history.replaceState(null, "", location.pathname + location.search), window.document.title = "")), this.a.I(new VisuOnlineState(this.a), 0)) : this.H(a)
     },
     H: function(a) {
@@ -8757,7 +8757,7 @@ VisuOnlineState.prototype = {
             b = this.a.Na(),
             c = this.a.Da().$k;
         this.At(c);
-        null === this.lf ? (c = this.a.Sa.empty() ? new EventMessage(1, this.a.s.L, 0, 0) : this.a.Sa.pop(), c.Wg ? (this.vl = !0, b.xB(c)) : (this.vl = !1, b.ag(c))) : b.vB(this.lf.uk);
+        null === this.lf ? (c = this.a.eventQueue.empty() ? new EventMessage(1, this.a.sessionInfo.externId, 0, 0) : this.a.eventQueue.pop(), c.Wg ? (this.vl = !0, b.xB(c)) : (this.vl = !1, b.ag(c))) : b.vB(this.lf.continuation);
         this.vx = Util.b();
         a.Za(b.Oa(), this)
     },
@@ -8767,7 +8767,7 @@ VisuOnlineState.prototype = {
     hb: function(a) {
         if (this.vl) this.a.I(this.Go(), this.io());
         else {
-            a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).b(this.lf);
+            a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).b(this.lf);
             var b = this;
             a instanceof PaintData ? a.je() ? (this.lf = null, this.zo && (this.a.Da().zy(), this.zo = !1),
                 this.Zl = !0, this.a.Da().Cq(a, function() {
@@ -8777,10 +8777,10 @@ VisuOnlineState.prototype = {
         }
     },
     Go: function() {
-        return !this.a.s.Hh && 4E3 <= Util.b() - this.Zo ? (this.Zo = Util.b(), new CheckDemoModeState(this.a, this)) : null !== this.a.g ? new VisuFileTransferState(this.a, this) : this;
+        return !this.a.sessionInfo.isDemoMode && 4E3 <= Util.b() - this.Zo ? (this.Zo = Util.b(), new CheckDemoModeState(this.a, this)) : null !== this.a.g ? new VisuFileTransferState(this.a, this) : this;
     },
     io: function() {
-        var a = this.a.Sa;
+        var a = this.a.eventQueue;
         if (null !== this.a.g && 3 === this.a.g.direction) return this.a.getConfiguration().UpdateRate;
         if (a.empty() && null === this.a.g) {
             var b = Util.b(),
@@ -8799,7 +8799,7 @@ VisuOnlineState.prototype = {
             d = !1,
             e = "";
         "number" === typeof b ? b >= VisuConnectionState.b && 100 >= b && (d = !0, e = "Err=" + b) : "Client id not present or no longer valid" === a ? (d = !0, e = "Err=1000") : "Unexpected format of service: 6" === a && (d = !0, e = "Err=1001");
-        d && this.a.fb.yz() && (this.a.fb.iB(!0), b = this.a.fb.un, b += location.pathname, b += location.search, b += "#CKT=" + this.a.fb.pn, "TRACE" === this.a.getConfiguration().LogLevel && (b += "#" + e), location.assign(b), c = !0);
+        d && this.a.visuSession.yz() && (this.a.visuSession.iB(!0), b = this.a.visuSession.un, b += location.pathname, b += location.search, b += "#CKT=" + this.a.visuSession.pn, "TRACE" === this.a.getConfiguration().LogLevel && (b += "#" + e), location.assign(b), c = !0);
         !1 === c && this.a.error("Error while processing the visualization: " +
             a)
     },
@@ -8816,12 +8816,12 @@ VisuPollingRegistrationState.prototype = {
     h: function() {
         var a = this.a.Ga(),
             b = this.a.Na();
-        b.wB(this.a.s.L);
+        b.wB(this.a.sessionInfo.externId);
         a.Za(b.Oa(), this)
     },
     hb: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).Ia();
-        "number" === typeof a ? 0 === a ? (Logger.b("Successfully finished visu registration: " + this.a.s.L), a = this.a.Nq(), "" !== a ? (this.a.fb.Lh = !0, this.a.I(new VisuRedundancyInitState(this.a, a), 0)) : this.a.I(new VisuOnlineInitState3(this.a), 0)) : 1 === a ? (0 === this.lx++ % 20 && Logger.info("Still polling the registration of the visualization. Is the visu stopped?"), this.a.I(this, this.a.getConfiguration().PollingRegistrationInterval)) :
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).Ia();
+        "number" === typeof a ? 0 === a ? (Logger.b("Successfully finished visu registration: " + this.a.sessionInfo.externId), a = this.a.Nq(), "" !== a ? (this.a.visuSession.Lh = !0, this.a.I(new VisuRedundancyInitState(this.a, a), 0)) : this.a.I(new VisuOnlineInitState3(this.a), 0)) : 1 === a ? (0 === this.lx++ % 20 && Logger.info("Still polling the registration of the visualization. Is the visu stopped?"), this.a.I(this, this.a.getConfiguration().PollingRegistrationInterval)) :
             this.H("Unexpected return value: " + a) : this.H(a)
     },
     H: function(a) {
@@ -8840,12 +8840,12 @@ VisuRegistrationState.prototype = {
         var a = this.a.Ga(),
             b = this.a.Na(),
             c = this.a.getConfiguration();
-        b.yB(c.Application, c.ClientName, this.a.s.fk, this.a.Ac);
+        b.yB(c.Application, c.ClientName, this.a.sessionInfo.applicationName, this.a.Ac);
         a.Za(b.Oa(), this)
     },
     hb: function(a) {
-        a = (new ResponseParser(a, this.a.s.Ja, this.a.ya())).lb();
-        "number" === typeof a ? (Logger.b("Successful first visu registration step: " + a), this.a.s.L = a, window.ProgrammingSystemAccess && window.ProgrammingSystemAccess.notifyValidExternId(a), this.a.getConfiguration().CasFactoryName && this.oh(), a = new VisuPollingRegistrationState(this.a), this.a.I(a, this.a.getConfiguration().PollingRegistrationInterval)) :
+        a = (new ResponseParser(a, this.a.sessionInfo.isBigEndian, this.a.ya())).lb();
+        "number" === typeof a ? (Logger.b("Successful first visu registration step: " + a), this.a.sessionInfo.externId = a, window.ProgrammingSystemAccess && window.ProgrammingSystemAccess.notifyValidExternId(a), this.a.getConfiguration().CasFactoryName && this.oh(), a = new VisuPollingRegistrationState(this.a), this.a.I(a, this.a.getConfiguration().PollingRegistrationInterval)) :
             this.H(a)
     },
     H: function(a) {
@@ -8855,10 +8855,10 @@ VisuRegistrationState.prototype = {
         return "VisuRegistrationState"
     },
     oh: function() {
-        var a = this.a.s;
-        if (null !== a && a.L !== ProtocolConstants.i && (a.bg !== ProtocolConstants.R || this.Ac)) {
+        var a = this.a.sessionInfo;
+        if (null !== a && a.externId !== ProtocolConstants.i && (a.defaultClientId !== ProtocolConstants.R || this.Ac)) {
             var b = this.a.Na(a);
-            b.Qm(a.L);
+            b.Qm(a.externId);
             this.a.Ga().oh(b.Oa())
         }
     }
@@ -9021,7 +9021,7 @@ TouchEventBridge.prototype = {
     },
     Ti: function(a, b) {
         var c = a.Sb;
-        return "touch" === c.pointerType ? (this.a.Sc.vj(c), 0 === this.Kb().Ta.length && this.jo(), this.ym(c, b) ? (Logger.warn(Util.i("Unexpected Pointerdown event for id: {0}; Ignored!", c.pointerId)), !1) : this.Tk(a, b, GestureConstants.gc) ? !0 : !1) : !1;
+        return "touch" === c.pointerType ? (this.a.editControlManager.vj(c), 0 === this.Kb().Ta.length && this.jo(), this.ym(c, b) ? (Logger.warn(Util.i("Unexpected Pointerdown event for id: {0}; Ignored!", c.pointerId)), !1) : this.Tk(a, b, GestureConstants.gc) ? !0 : !1) : !1;
     },
     Rg: function(a, b) {
         var c = a.Sb;
@@ -9385,7 +9385,7 @@ GestureEventHandler.prototype = {
         return this.a.ae.Gj()
     },
     Lj: function(a, b, c) {
-        a = EventMessage.pa(a, this.a.s.L, b);
+        a = EventMessage.pa(a, this.a.sessionInfo.externId, b);
         void 0 !== c && null !== c && a.sc(c);
         this.Ra.$b(a)
     },
@@ -9475,7 +9475,7 @@ GestureEventHandler.prototype = {
         return !1
     },
     ul: function(a, b) {
-        b = a.data().createEvent(this.a.s.L, b, this.Ra);
+        b = a.data().createEvent(this.a.sessionInfo.externId, b, this.Ra);
         null !== a.Ha() && b.sc(a.Ha());
         this.mo(b)
     },
@@ -9483,7 +9483,7 @@ GestureEventHandler.prototype = {
         this.Ra.$b(a)
     },
     sp: function(a, b) {
-        var c = a.data().createEvent(this.a.s.L, b, this.Ra);
+        var c = a.data().createEvent(this.a.sessionInfo.externId, b, this.Ra);
         c.Dr(b.na);
         null !== a.Ha() && c.sc(a.Ha());
         this.mo(c)
@@ -9508,13 +9508,13 @@ GestureEventHandler.prototype = {
     ep: function(a, b) {
         var c = b.vq(),
             d = b.info().zoom();
-        if (ElementStateFlags.K(a, ElementStateFlags.eg)) d.Zf(new Point(d.md.c + c.m, d.Rb.f));
+        if (ElementStateFlags.K(a, ElementStateFlags.eg)) d.Zf(new Point(d.md.c + c.left, d.Rb.f));
         else if (ElementStateFlags.K(a, ElementStateFlags.cf)) {
             var e = d.md.c - (1 - d.Nd) * d.md.c;
             d.Zf(new Point(e, d.Rb.f));
             b.info().scroll().ne(new Point(d.Rb.c - d.md.c, b.info().scroll().Fa.f))
         }
-        ElementStateFlags.K(a, ElementStateFlags.fg) ? d.Zf(new Point(d.Rb.c, d.md.f + c.o)) : ElementStateFlags.K(a, ElementStateFlags.df) && (e = d.md.f - (1 - d.Nd) * d.md.f,
+        ElementStateFlags.K(a, ElementStateFlags.fg) ? d.Zf(new Point(d.Rb.c, d.md.f + c.top)) : ElementStateFlags.K(a, ElementStateFlags.df) && (e = d.md.f - (1 - d.Nd) * d.md.f,
             d.Zf(new Point(d.Rb.c, e)), b.info().scroll().ne(new Point(b.info().scroll().Fa.c, d.Rb.f - d.md.f)))
     },
     bw: function(a, b) {
@@ -9602,7 +9602,7 @@ AnimationTimer.prototype = {
     Hd: function() {
         var a = this.Le.info().scroll();
         1 > Math.abs(a.xb.c) && 1 > Math.abs(a.xb.f) ?
-            this.stop() : (a.xb.kr(1 - this.Dj()), a.xb.c = Util.hg(a.xb.c), a.xb.f = Util.hg(a.xb.f), a.Fa.offset(a.xb), a = this.Le.jm(), this.Le.Tq(a), ElementStateFlags.K(a, ElementStateFlags.bn) || ElementStateFlags.K(a, ElementStateFlags.ms) && ElementStateFlags.K(a, ElementStateFlags.ns) ? this.stop() : this.oc.Jj(this.Va, this.Le))
+            this.stop() : (a.xb.scaleInPlace(1 - this.Dj()), a.xb.c = Util.hg(a.xb.c), a.xb.f = Util.hg(a.xb.f), a.Fa.offset(a.xb), a = this.Le.jm(), this.Le.Tq(a), ElementStateFlags.K(a, ElementStateFlags.bn) || ElementStateFlags.K(a, ElementStateFlags.ms) && ElementStateFlags.K(a, ElementStateFlags.ns) ? this.stop() : this.oc.Jj(this.Va, this.Le))
     }
 };
 var AnimationConfig;
@@ -10006,9 +10006,9 @@ FlickGestureEvent.prototype = {
         a = new EventMessage(2051, a, b.id(), 0);
         b = BinaryBuffer.b(12);
         var c = BinaryWriter.b(b, !0);
-        c.B(this.tb.Yc());
-        c.B(this.Jb.Yc());
-        c.B(this.Nf);
+        c.writeUint32(this.tb.Yc());
+        c.writeUint32(this.Jb.Yc());
+        c.writeUint32(this.Nf);
         a.$a(b);
         return a
     },
@@ -10025,7 +10025,7 @@ FlickGestureEvent.prototype = {
     },
     Pm: function(a) {
         this.Jb =
-            a.pe(this.tb)
+            a.subtract(this.tb)
     }
 };
 var TouchGestureEvent;
@@ -10074,21 +10074,21 @@ TouchGestureEvent.prototype = {
         g = BinaryBuffer.b((8 + g) * this.ta.length);
         var r = BinaryWriter.b(g, !0);
         for (e = 0; e < this.ta.length; ++e) {
-            r.B(this.ta[e].location().current().Yc());
+            r.writeUint32(this.ta[e].location().current().Yc());
             var v = 255 & this.fw(this.ta[e]);
             this.ta[e].K(GestureConstants.Oc) || (f = !1);
             if (this.ta[e].K(GestureConstants.Ph) || this.ta[e].K(GestureConstants.tn)) v |= 256;
             v |= (this.ta[e].id() & 65535) << 16 >>> 0;
-            r.B(v)
+            r.writeUint32(v)
         }
         if (c.a.ba) {
             for (e = 0; e < this.ta.length; ++e)
                 if (v = this.ta[e].Ha(), null !== v) {
                     if (null === h || h !== v) h = v;
-                    r.B(v.kb);
-                    r.B(v.zb)
-                } else r.B(0), r.B(0);
-            for (e = 0; e < this.ta.length; ++e) r.B(this.ta[e].td.Yc())
+                    r.writeUint32(v.kb);
+                    r.writeUint32(v.zb)
+                } else r.writeUint32(0), r.writeUint32(0);
+            for (e = 0; e < this.ta.length; ++e) r.writeUint32(this.ta[e].td.Yc())
         }
         f && b++;
         a = new EventMessage(b, a, d, l);
@@ -10133,7 +10133,7 @@ PanGestureEvent.prototype = {
     },
     aw: function(a, b, c) {
         c = c.na.size().scale(b.iz());
-        b = new Point(c.O * b.Lq(), c.Z * b.Lq());
+        b = new Point(c.width * b.Lq(), c.height * b.Lq());
         return new Point(Math.max(-b.c,
             Math.min(b.c, a.c)), Math.max(-b.f, Math.min(b.f, a.f)));
     },
@@ -10144,8 +10144,8 @@ PanGestureEvent.prototype = {
         a = new EventMessage(2050, a, b.id(), 0);
         var c = BinaryBuffer.b(8);
         var d = BinaryWriter.b(c, !0);
-        d.B(b.info().scroll().ug.Yc());
-        d.B(b.info().scroll().Fa.Yc());
+        d.writeUint32(b.info().scroll().ug.Yc());
+        d.writeUint32(b.info().scroll().Fa.Yc());
         a.$a(c);
         return a
     },
@@ -10153,7 +10153,7 @@ PanGestureEvent.prototype = {
         return this.tb
     },
     Pm: function(a) {
-        this.Jb = a.pe(this.tb)
+        this.Jb = a.subtract(this.tb)
     },
     pB: function(a, b) {
         var c = b - this.cp;
@@ -10185,7 +10185,7 @@ PinchGestureEvent.prototype = {
         c.Rj(this.Gw);
         c.YA(this.aj);
         c.setOrientation(this.Wi);
-        d.ne(this.Kn.pe(this.Nl));
+        d.ne(this.Kn.subtract(this.Nl));
         b = a.jm();
         ElementStateFlags.Xf(b, ElementStateFlags.Xj) && this.Tv(a) && (b = ElementStateFlags.hA(b));
         return b
@@ -10195,17 +10195,17 @@ PinchGestureEvent.prototype = {
         var c = b.info().zoom();
         b = BinaryBuffer.b(16);
         var d = BinaryWriter.b(b, !0);
-        d.B(c.Rb.Yc());
-        d.B(c.md.Yc());
-        d.B(65536 * c.Nd);
+        d.writeUint32(c.Rb.Yc());
+        d.writeUint32(c.md.Yc());
+        d.writeUint32(65536 * c.Nd);
         var e = c.aj / 2 / Math.PI * 65536;
         c = c.orientation() / 2 / Math.PI * 65536;
-        d.B(e | c << 16);
+        d.writeUint32(e | c << 16);
         a.$a(b);
         return a
     },
     Tv: function(a) {
-        return 400 > a.info().scroll().Jy.rm(new Point(0, 0));
+        return 400 > a.info().scroll().Jy.distanceSquared(new Point(0, 0));
     }
 };
 var BaseGestureRecognizer;
@@ -10239,7 +10239,7 @@ GestureRecognizer.prototype = {
                     this.Fv(b);
                     break;
                 case GestureConstants.jg:
-                    if (e = e.current().rm(e.uh()) > a.Ll.Mw)
+                    if (e = e.current().distanceSquared(e.uh()) > a.Ll.Mw)
                         if (this.Pb === GestureConstants.Oh) this.Hi(b, GestureConstants.Ob);
                         else if (this.Pb ===
                         GestureConstants.Nh) this.Hi(b, GestureConstants.ed);
@@ -10293,7 +10293,7 @@ GestureRecognizer.prototype = {
     Ul: function(a) {
         var b = a.touches()[0].location().current();
         if (this.Md === GestureConstants.Ob || this.Pb !== GestureConstants.te) {
-            var c = b.pe(this.Ef.start().ac(this.Ef.Jb));
+            var c = b.subtract(this.Ef.start().ac(this.Ef.Jb));
             this.Ef.pB(c, a.timeStamp());
             this.Ef.Pm(b)
         }
@@ -10328,7 +10328,7 @@ InteractiveElement.prototype = {
         return this.pd
     },
     Sf: function(a) {
-        return a.c >= this.na.m && a.c <= this.na.T && a.f >= this.na.o && a.f <= this.na.X
+        return a.c >= this.na.left && a.c <= this.na.right && a.f >= this.na.top && a.f <= this.na.bottom;
     },
     Yi: function(a, b, c, d) {
         if (!ElementStateFlags.Xf(d, ElementStateFlags.Tm)) {
@@ -10348,10 +10348,10 @@ InteractiveElement.prototype = {
         d < b.wa.Wb &&
             (a = ElementStateFlags.Zc(a, ElementStateFlags.ik), a = ElementStateFlags.Zc(a, ElementStateFlags.an));
         d > b.wa.Vb && (a = ElementStateFlags.Zc(a, ElementStateFlags.hk), a = ElementStateFlags.Zc(a, ElementStateFlags.$m));
-        e.c < f.m && (a = ElementStateFlags.Zc(a, ElementStateFlags.eg), a = this.Yi(ElementStateFlags.Ym, e, c.wa.Wb, a));
-        e.f < f.o && (a = ElementStateFlags.Zc(a, ElementStateFlags.fg), a = this.Yi(ElementStateFlags.Zm, e, c.wa.Wb, a));
-        e.c > f.T && (a = ElementStateFlags.Zc(a, ElementStateFlags.cf), a = this.Yi(ElementStateFlags.Wm, e, c.wa.Vb, a));
-        e.f > f.X && (a = ElementStateFlags.Zc(a, ElementStateFlags.df), a = this.Yi(ElementStateFlags.Xm, e, c.wa.Vb, a));
+        e.c < f.left && (a = ElementStateFlags.Zc(a, ElementStateFlags.eg), a = this.Yi(ElementStateFlags.Ym, e, c.wa.Wb, a));
+        e.f < f.top && (a = ElementStateFlags.Zc(a, ElementStateFlags.fg), a = this.Yi(ElementStateFlags.Zm, e, c.wa.Wb, a));
+        e.c > f.right && (a = ElementStateFlags.Zc(a, ElementStateFlags.cf), a = this.Yi(ElementStateFlags.Wm, e, c.wa.Vb, a));
+        e.f > f.bottom && (a = ElementStateFlags.Zc(a, ElementStateFlags.df), a = this.Yi(ElementStateFlags.Xm, e, c.wa.Vb, a));
         return a
     },
     Tq: function(a) {
@@ -10364,11 +10364,11 @@ InteractiveElement.prototype = {
             c.Vb.f))
     },
     vq: function() {
-        var a = this.na.vb().pe(this.pd.scroll().wa.Vb);
-        var b = this.na.rc().pe(this.pd.scroll().wa.Wb);
+        var a = this.na.vb().subtract(this.pd.scroll().wa.Vb);
+        var b = this.na.rc().subtract(this.pd.scroll().wa.Wb);
         b = (new Rectangle(a.c, a.f, b.c, b.f)).b(this.pd.zoom().Rb, this.pd.zoom().Nd);
-        a = this.na.vb().pe(b.vb());
-        b = this.na.rc().pe(b.rc());
+        a = this.na.vb().subtract(b.vb());
+        b = this.na.rc().subtract(b.rc());
         b = new Rectangle(a.c, a.f, b.c, b.f);
         a = b.rc().min(this.pd.scroll().wa.Wb);
         b = b.vb().min(this.pd.scroll().wa.Vb);
@@ -10619,18 +10619,18 @@ k.Jj = function(a, b) {
     c.restore()
 };
 k.Kw = function(a, b) {
-    var c = b.na.m,
-        d = b.na.o,
-        e = b.na.w() + 1;
-    b = b.na.v() + 1;
+    var c = b.na.left,
+        d = b.na.top,
+        e = b.na.getWidth() + 1;
+    b = b.na.getHeight() + 1;
     a.fillStyle = this.Qw;
     a.fillRect(c, d, e, b)
 };
 k.Lw = function(a, b) {
-    var c = b.na.m,
-        d = b.na.o,
-        e = b.na.w() + 1,
-        f = b.na.v() + 1;
+    var c = b.na.left,
+        d = b.na.top,
+        e = b.na.getWidth() + 1,
+        f = b.na.getHeight() + 1;
     a.beginPath();
     a.rect(c, d, e, f);
     a.clip();
@@ -10639,26 +10639,26 @@ k.Lw = function(a, b) {
 };
 k.Kj = function(a, b) {
     var c = a.he();
-    var d = b.na.m;
-    var e = b.na.o;
-    var f = b.na.w() + 1;
-    var g = b.na.v() + 1;
+    var d = b.na.left;
+    var e = b.na.top;
+    var f = b.na.getWidth() + 1;
+    var g = b.na.getHeight() + 1;
     c.beginPath();
     c.rect(d, e, f, g);
     c.clip();
-    for (e = 0; e < b.info().ud.length; ++e) d = b.info().Fm(e), null !== d && (f = a.Cc.Nj(d.zi), f = f.ei.canvas, c.save(), this.Qp(c, b, d), c.drawImage(f, 0, 0), c.restore())
+    for (e = 0; e < b.info().ud.length; ++e) d = b.info().Fm(e), null !== d && (f = a.commandCache.Nj(d.zi), f = f.ei.canvas, c.save(), this.Qp(c, b, d), c.drawImage(f, 0, 0), c.restore())
 };
 k.Qp = function(a, b, c) {
     a.translate(b.info().zoom().Rb.c, b.info().zoom().Rb.f);
     a.scale(b.info().zoom().Nd, b.info().zoom().Nd);
     a.translate(-b.info().zoom().Rb.c, -b.info().zoom().Rb.f);
     a.translate(null !== c && c.ll ? 0 : b.info().scroll().Fa.c, null !== c && c.ml ? 0 : b.info().scroll().Fa.f);
-    null !== c && a.translate(b.na.m - c.offset().c, b.na.o - c.offset().f)
+    null !== c && a.translate(b.na.left - c.offset().c, b.na.top - c.offset().f)
 };
 k.im = function(a, b) {
     var c = this.Gl.getContext("2d");
-    c.drawImage(a.Ea.canvas, b.m, b.o, b.w(), b.v(), b.m, b.o, b.w(), b.v());
-    c.drawImage(a.Y.canvas, b.m, b.o, b.w(), b.v(), b.m, b.o, b.w(), b.v())
+    c.drawImage(a.visibleContext.canvas, b.left, b.top, b.getWidth(), b.getHeight(), b.left, b.top, b.getWidth(), b.getHeight());
+    c.drawImage(a.offscreenContext.canvas, b.left, b.top, b.getWidth(), b.getHeight(), b.left, b.top, b.getWidth(), b.getHeight())
 };
 k.Zn = function(a, b) {
     var c = window.document.createElement("canvas");
@@ -10717,7 +10717,7 @@ PerformanceBenchmarker.prototype = {
     },
     Mj: function(a) {
         !this.vc ||
-            null === this.Ud || this.Ud.c < a.m || this.Ud.c > a.T || this.Ud.f < a.o || this.Ud.f > a.X || (this.Ud = null, this.ol = !0)
+            null === this.Ud || this.Ud.c < a.left || this.Ud.c > a.right || this.Ud.f < a.top || this.Ud.f > a.bottom || (this.Ud = null, this.ol = !0)
     },
     Ez: function() {
         return Math.round(this.hl / 1E3)
@@ -10726,7 +10726,7 @@ PerformanceBenchmarker.prototype = {
         return Math.round(this.bp / 1E3)
     },
     rp: function(a, b) {
-        a = new EventMessage(2097152, this.a.s.L, b, a & 4294967295);
+        a = new EventMessage(2097152, this.a.sessionInfo.externId, b, a & 4294967295);
         a.WA();
         this.a.$b(a)
     },
@@ -10799,7 +10799,7 @@ ClipRegionCollection.prototype = {
     },
     eq: function(a) {
         a.beginPath();
-        for (var b = 0; b < this.P.length; ++b) a.rect(this.P[b].m, this.P[b].o, this.P[b].w(), this.P[b].v());
+        for (var b = 0; b < this.P.length; ++b) a.rect(this.P[b].left, this.P[b].top, this.P[b].getWidth(), this.P[b].getHeight());
         a.clip()
     }
 };
@@ -10959,7 +10959,7 @@ DiagnosticsOverlay.prototype = {
             this.wb.push({
                 title: "Canvas-Size",
                 We: function() {
-                    return Util.i("{0}/{1}", b.fe().w(), b.fe().v());
+                    return Util.i("{0}/{1}", b.fe().getWidth(), b.fe().getHeight());
                 }
             });
             this.wb.push({
@@ -11014,7 +11014,7 @@ EditControlManager.prototype = {
         this.Hb = a;
         this.kj = b;
         this.Ps();
-        c.a.ba ? (this.sg = c.a.U().ma(), this.sg.qr(this.Hb)) : (this.wg = c.Ea.canvas.parentNode, this.wg.appendChild(this.Hb))
+        c.a.ba ? (this.sg = c.a.U().ma(), this.sg.qr(this.Hb)) : (this.wg = c.visibleContext.canvas.parentNode, this.wg.appendChild(this.Hb))
     },
     close: function() {
         null !== this.Hb && (null !== this.wg && this.wg.removeChild(this.Hb), null !== this.sg && this.sg.qr(null), this.Zg());
@@ -11027,11 +11027,11 @@ EditControlManager.prototype = {
             var c = this.Hb.value.length + 1;
             this.kj && (c *= 2);
             var d = BinaryBuffer.b(c);
-            BinaryWriter.b(d, this.a.s.Ja, this.a.sh()).Eb(this.Hb.value, this.kj);
-            c = new EventMessage(512, this.a.s.L, a ? this.kj ? 3 : 1 : 2, 0);
+            BinaryWriter.b(d, this.a.sessionInfo.isBigEndian, this.a.sh()).writeString(this.Hb.value, this.kj);
+            c = new EventMessage(512, this.a.sessionInfo.externId, a ? this.kj ? 3 : 1 : 2, 0);
             c.$a(d);
-            c.Dr(b.Rq(4));
-            this.a.Sa.push(c);
+            c.Dr(b.inflate(4));
+            this.a.eventQueue.push(c);
             a ? this.tk = !0 : this.close()
         }
     },
@@ -11236,132 +11236,132 @@ k.mn = function(a) {
 };
 var Point;
 Point = function(a, b) {
-    this.c = a;
-    this.f = b
+    this.x = a;
+    this.y = b
 };
 Point.prototype = {
-    Nm: function(a) {
-        this.c -= a.c;
-        this.f -= a.f;
+    subtractInPlace: function(a) {
+        this.x -= a.c;
+        this.y -= a.f;
         return this
     },
-    pe: function(a) {
-        return this.clone().Nm(a)
+    subtract: function(a) {
+        return this.clone().subtractInPlace(a);
     },
     min: function(a) {
-        return new Point(Math.min(this.c, a.c), Math.min(this.f, a.f));
+        return new Point(Math.min(this.x, a.c), Math.min(this.y, a.f));
     },
     max: function(a) {
-        return new Point(Math.max(this.c, a.c), Math.max(this.f, a.f));
+        return new Point(Math.max(this.x, a.c), Math.max(this.y, a.f));
     },
     offset: function(a) {
-        this.c += a.c;
-        this.f += a.f;
+        this.x += a.c;
+        this.y += a.f;
         return this
     },
     ac: function(a) {
         return this.clone().offset(a)
     },
     Rz: function(a) {
-        this.c += a.O;
-        this.f += a.Z;
+        this.x += a.width;
+        this.y += a.height;
         return this
     },
     Zq: function(a) {
         return this.clone().Rz(a)
     },
     Yc: function() {
-        return (this.f >>> 0 & 65535 | this.c >>> 0 << 16) >>>
-            0
+        return (this.y >>> 0 & 65535 | this.x >>> 0 << 16) >>>
+            0;
     },
     Ry: function(a) {
-        return Math.sqrt(this.rm(a))
+        return Math.sqrt(this.distanceSquared(a));
     },
-    rm: function(a) {
-        return (this.c - a.c) * (this.c - a.c) + (this.f - a.f) * (this.f - a.f)
+    distanceSquared: function(a) {
+        return (this.x - a.c) * (this.x - a.c) + (this.y - a.f) * (this.y - a.f);
     },
     clone: function() {
-        return new Point(this.c, this.f);
+        return new Point(this.x, this.y);
     },
-    kr: function(a) {
-        this.c *= a;
-        this.f *= a;
+    scaleInPlace: function(a) {
+        this.x *= a;
+        this.y *= a;
         return this
     },
     qA: function(a) {
-        return this.clone().kr(a)
+        return this.clone().scaleInPlace(a);
     },
     rotate: function(a, b) {
         if (0 === a % 360) return this;
         var c = a * Math.PI / 180;
         a = Math.cos(c);
         c = Math.sin(c);
-        var d = this.c,
-            e = this.f;
+        var d = this.x,
+            e = this.y;
         if (b) {
             var f = b.c;
             b = b.f
         } else f = b = 0;
-        this.c = d * a - e * c + f * (1 - a) + b * c;
-        this.f = d * c + e * a + b * (1 - a) - f * c;
+        this.x = d * a - e * c + f * (1 - a) + b * c;
+        this.y = d * c + e * a + b * (1 - a) - f * c;
         return this
     }
 };
 var Rectangle;
 Rectangle = function(a, b, c, d, e) {
-    this.m = a;
-    this.o = b;
-    this.T = c;
-    this.X = d;
-    this.ec = void 0 !== e ? e : null
+    this.left = a;
+    this.top = b;
+    this.right = c;
+    this.bottom = d;
+    this.transform = void 0 !== e ? e : null
 };
 Rectangle.prototype = {
-    w: function() {
-        return this.T - this.m
+    getWidth: function() {
+        return this.right - this.left;
     },
-    v: function() {
-        return this.X - this.o
+    getHeight: function() {
+        return this.bottom - this.top;
     },
-    qh: function() {
-        return new Point((this.m + this.T) / 2, (this.o + this.X) / 2);
+    getCenter: function() {
+        return new Point((this.left + this.right) / 2, (this.top + this.bottom) / 2);
     },
     clone: function() {
-        return new Rectangle(this.m, this.o, this.T, this.X, this.ec);
+        return new Rectangle(this.left, this.top, this.right, this.bottom, this.transform);
     },
     vb: function() {
-        return new Point(this.m, this.o);
+        return new Point(this.left, this.top);
     },
     rc: function() {
-        return new Point(this.T, this.X);
+        return new Point(this.right, this.bottom);
     },
     b: function(a, b) {
         var c = this.size().scale(b),
-            d = this.vb().Nm(a);
+            d = this.vb().subtractInPlace(a);
         b = (new Size(d.c, d.f)).scale(b);
         a = a.Zq(b);
         c = a.Zq(c);
         return new Rectangle(a.c, a.f, c.c, c.f);
     },
     size: function() {
-        return new Size(this.w(), this.v());
+        return new Size(this.getWidth(), this.getHeight());
     },
     ac: function(a,
         b) {
-        return new Rectangle(this.m + a, this.o + b, this.T + a, this.X + b, this.ec);
+        return new Rectangle(this.left + a, this.top + b, this.right + a, this.bottom + b, this.transform);
     },
-    Rq: function(a) {
-        return new Rectangle(this.m - a, this.o - a, this.T + a, this.X + a, this.ec);
+    inflate: function(a) {
+        return new Rectangle(this.left - a, this.top - a, this.right + a, this.bottom + a, this.transform);
     },
     Yy: function(a) {
-        return this.m === a.m && this.o === a.o && this.T === a.T && this.X === a.X
+        return this.left === a.left && this.top === a.top && this.right === a.right && this.bottom === a.bottom;
     },
     normalize: function() {
-        if (this.m > this.T) {
-            var a = this.T;
-            this.T = this.m;
-            this.m = a
+        if (this.left > this.right) {
+            var a = this.right;
+            this.right = this.left;
+            this.left = a
         }
-        this.o > this.X && (a = this.X, this.X = this.o, this.o = a)
+        this.top > this.bottom && (a = this.bottom, this.bottom = this.top, this.top = a)
     },
     Mz: function() {
         var a = this.clone();
@@ -11369,10 +11369,10 @@ Rectangle.prototype = {
         return a
     },
     Ay: function(a) {
-        return a >= this.m && a <= this.T
+        return a >= this.left && a <= this.right;
     },
     By: function(a) {
-        return a >= this.o && a <= this.X
+        return a >= this.top && a <= this.bottom;
     }
 };
 var WindowResizeHandler;
@@ -11400,18 +11400,18 @@ WindowResizeHandler.prototype = {
         a !== this.mp && (this.oo = !0, this.mp = b = a, this.a.Da().Pz());
         this.lp++;
         this.a.Da().Dq(b);
-        null !== this.s && null !== this.ob && (a = EventMessage.R(this.a.s.L, this.a.getConfiguration().BestFit, this.a.getConfiguration().BestFitForDialogs, this.a.getConfiguration().ScaleTypeIsotropic,
+        null !== this.sessionInfo && null !== this.configuration && (a = EventMessage.R(this.a.sessionInfo.externId, this.a.getConfiguration().BestFit, this.a.getConfiguration().BestFitForDialogs, this.a.getConfiguration().ScaleTypeIsotropic,
             this.a.Da().fe(), this.a.Da().Ak), this.a.CA(a))
     }
 };
 var Size;
 Size = function(a, b) {
-    this.O = a;
-    this.Z = b
+    this.width = a;
+    this.height = b
 };
 Size.prototype = {
     scale: function(a) {
-        return new Size(this.O * a, this.Z * a);
+        return new Size(this.width * a, this.height * a);
     }
 };
 var LoadingSpinner;
@@ -11422,7 +11422,7 @@ LoadingSpinner = function(a, b, c, d) {
     this.Yv = Util.b();
     this.Dx = Util.b();
     this.cu = d;
-    this.Ib = null;
+    this.fontString = null;
     if (c) this.b();
     else {
         var e = this,
@@ -11449,17 +11449,17 @@ LoadingSpinner.prototype = {
                 g = 2 * Math.PI * (Util.b() - this.Yv) / 5E3,
                 h = 1;
             a.save();
-            if (250 > b.w() || 250 > b.v()) h = .9 * Math.min(b.w() / 250, b.v() / 250);
+            if (250 > b.getWidth() || 250 > b.getHeight()) h = .9 * Math.min(b.getWidth() / 250, b.getHeight() / 250);
             a.scale(h, h);
-            a.translate(Math.max(5, (b.w() - 250) / 2), Math.max(5, (b.v() - 250) / 2));
+            a.translate(Math.max(5, (b.getWidth() - 250) / 2), Math.max(5, (b.getHeight() - 250) / 2));
             a.strokeStyle = "#a90018";
             a.lineWidth = 4;
             a.strokeRect(0, 0, 250, 250);
             a.fillStyle = "#f4f4f4";
             a.fillRect(0, 0, 250, 250);
             for (b = 0; 5 > b; ++b) a.save(), a.translate(125, f), a.rotate(g + b * (c + d)), this.Au(a, c, e, "#cd001c"), a.restore();
-            null === this.Ib && this.fu(a, 250);
-            a.font = this.Ib;
+            null === this.fontString && this.fu(a, 250);
+            a.font = this.fontString;
             a.textAlign = "center";
             a.textBaseline = "bottom";
             a.fillStyle = "#000000";
@@ -11470,7 +11470,7 @@ LoadingSpinner.prototype = {
     fu: function(a, b) {
         var c = 40;
         for (a.font = this.Ho(c); 2 < c && a.measureText(this.ea).width >= .95 * b;) c -= 2, a.font = this.Ho(c);
-        this.Ib = a.font
+        this.fontString = a.font
     },
     Ho: function(a) {
         return "italic " + a + "px Arial"
@@ -11491,7 +11491,7 @@ LoadingSpinner.prototype = {
         a.fill()
     },
     b: function() {
-        var a = this.Tc.Y;
+        var a = this.Tc.offscreenContext;
         a.font = "1em Arial";
         a.textAlign = "left";
         a.textBaseline = "top";
@@ -11511,10 +11511,10 @@ TextWidthCache.prototype = {
     count: function() {
         return this.dh.length
     },
-    w: function(a) {
+    getWidth: function(a) {
         return this.dh[a].c
     },
-    v: function(a) {
+    getHeight: function(a) {
         return this.dh[a].f
     },
     Yp: function(a, b, c) {
@@ -11567,9 +11567,9 @@ AffineTransform.prototype = {
         null !== this.Ka ? this.mx(a, b) : this.Ys(a)
     },
     mx: function(a, b) {
-        a.translate(b.m, b.o);
+        a.translate(b.left, b.top);
         a.rotate(this.Ka);
-        a.translate(-b.m, -b.o)
+        a.translate(-b.left, -b.top)
     },
     Ys: function(a) {
         a.transform(this.gp, this.hp, this.ip, this.jp, this.ro, this.so)
@@ -11663,7 +11663,7 @@ Util.Qh = function(a, b) {
     return c
 };
 Util.A = function(a) {
-    return Util.Mc(a.getState().Bg);
+    return Util.Mc(a.getState().fontSize);
 };
 Util.Mc = function(a) {
     return 1.15 * a
@@ -11677,11 +11677,11 @@ Util.Dd = function(a) {
 };
 Util.Cd = function(a, b) {
     var c;
-    b instanceof Rectangle ? c = new Point(b.m, b.o) : c = b;
+    b instanceof Rectangle ? c = new Point(b.left, b.top) : c = b;
     a.style.position = "absolute";
     a.style.left = Math.floor(c.c) + "px";
     a.style.top = Math.floor(c.f) + "px";
-    b instanceof Rectangle && (a.style.width = Math.floor(b.w()) + "px", a.style.height = Math.floor(b.v()) + "px")
+    b instanceof Rectangle && (a.style.width = Math.floor(b.getWidth()) + "px", a.style.height = Math.floor(b.getHeight()) + "px")
 };
 Util.i = function(a) {
     var b = arguments;
@@ -11694,7 +11694,7 @@ Util.i = function(a) {
     return c
 };
 Util.xj = function(a) {
-    return Util.i("{0}/{1} {2}/{3}", a.m, a.o, a.T, a.X);
+    return Util.i("{0}/{1} {2}/{3}", a.left, a.top, a.right, a.bottom);
 };
 Util.R = function(a) {
     return Util.i("{0}/{1}", a.c, a.f);
@@ -11738,8 +11738,8 @@ Util.tj = function(a, b) {
 Util.$e = function(a) {
     var b = BinaryBuffer.b(4),
         c = BinaryWriter.b(b, !0);
-    c.Db(a.c);
-    c.Db(a.f);
+    c.writeInt16(a.c);
+    c.writeInt16(a.f);
     return b
 };
 Util.lb = function(a, b) {
@@ -11809,13 +11809,13 @@ Util.Ze = function(a) {
     return a(0, 0, 0, [], null, !0).Ha()
 };
 Util.qe = function(a, b, c) {
-    c.Sk ? (a.m += Math.floor(a.w() / 2) - Math.floor(b.O / 2), a.T = a.m + b.O) : c.Fl ? a.m = a.T - b.O : a.T = a.m + b.O;
-    c.Xl ? (a.o += Math.floor(a.v() / 2) - Math.floor(b.Z / 2), a.X = a.o + b.Z) : c.pk ? a.o = a.X - b.Z : a.X = a.o + b.Z;
+    c.Sk ? (a.left += Math.floor(a.getWidth() / 2) - Math.floor(b.width / 2), a.right = a.left + b.width) : c.Fl ? a.left = a.right - b.width : a.right = a.left + b.width;
+    c.Xl ? (a.top += Math.floor(a.getHeight() / 2) - Math.floor(b.height / 2), a.bottom = a.top + b.height) : c.pk ? a.top = a.bottom - b.height : a.bottom = a.top + b.height;
     return a
 };
 Util.re = function(a, b, c) {
-    a.w() < b.w() && (c.Sk ? a = a.ac(Math.floor(b.w() / 2) - Math.floor(a.w() / 2), 0) : c.Fl && (a = a.ac(b.w() - a.w(), 0)));
-    a.v() < b.v() && (c.Xl ? a = a.ac(0, Math.floor(b.v() / 2) - Math.floor(a.v() / 2)) : c.pk && (a = a.ac(0, b.v() - a.v())));
+    a.getWidth() < b.getWidth() && (c.Sk ? a = a.ac(Math.floor(b.getWidth() / 2) - Math.floor(a.getWidth() / 2), 0) : c.Fl && (a = a.ac(b.getWidth() - a.getWidth(), 0)));
+    a.getHeight() < b.getHeight() && (c.Xl ? a = a.ac(0, Math.floor(b.getHeight() / 2) - Math.floor(a.getHeight() / 2)) : c.pk && (a = a.ac(0, b.getHeight() - a.getHeight())));
     return a
 };
 Util.gg = function(a) {

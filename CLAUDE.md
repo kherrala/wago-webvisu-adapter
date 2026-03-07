@@ -65,6 +65,10 @@ Both controllers implement `IWebVisuController` (defined in `controller-interfac
 - **`polling-service.ts`** — Background service that cycles through all lights to keep cached status fresh.
 - **`mcp-server/server.py`** — Python ASGI app (uvicorn) exposing 3 MCP tools: `list_lights`, `get_light_status`, `toggle_light`.
 
+### Reverse Engineering Reference
+
+The original CoDeSys WebVisu client (`reverse-engineering/webvisu.js`) has a deobfuscated version at `reverse-engineering/webvisu-deobfuscated.js` with formatted code and ~300 renamed symbols (classes, properties, methods). **Always use the deobfuscated version** when studying the reference implementation — never read the minified original directly. Regenerate with `reverse-engineering/deobfuscate.sh`. Symbol mappings are in `deobfuscate-transform.js`; ambiguous property names are documented in `SYMBOL-REFERENCE.md`.
+
 ### Protocol Details
 
 The CoDeSys binary protocol is documented in `data/reverse-engineering/PROTOCOL.md`. Key points:

@@ -423,12 +423,163 @@ module.exports = function (fileInfo, api) {
     // Property renames — unique property names on known classes
     // =====================================================================
 
-    // FrameHeader instance field names (unique enough for global property rename)
+    // Property names verified as safe for global rename.
+    // Each property was checked to have a single meaning across all classes
+    // that use it (or consistent meaning across interface implementations).
     const PROPERTY_RENAMES = {
+        // =============================================================
+        // FrameHeader fields
+        // =============================================================
         Hl: 'serviceGroup',
         Il: 'serviceId',
         Fp: 'sessionId',
         Fg: 'headerLength',
+
+        // =============================================================
+        // Rectangle fields and methods
+        // =============================================================
+        m: 'left',                // Rectangle.left (only assigned in Rectangle constructor)
+        o: 'top',                 // Rectangle.top
+        T: 'right',               // Rectangle.right
+        X: 'bottom',              // Rectangle.bottom
+        ec: 'transform',          // Rectangle.transform (AffineTransform or null)
+        w: 'getWidth',            // Rectangle.getWidth + TextWidthCache.getWidth (same meaning)
+        v: 'getHeight',           // Rectangle.getHeight + TextWidthCache.getHeight (same meaning)
+        qh: 'getCenter',          // Rectangle.getCenter → Point
+        Rq: 'inflate',            // Rectangle.inflate(d)
+
+        // =============================================================
+        // Size fields
+        // =============================================================
+        O: 'width',               // Size.width (only assigned in Size constructor)
+        Z: 'height',              // Size.height
+
+        // =============================================================
+        // SessionInfo fields
+        // =============================================================
+        se: 'deviceSessionId',    // Protocol session ID from OpenConnection
+        Ja: 'isBigEndian',        // Byte order flag
+        Hh: 'isDemoMode',         // Demo mode flag
+        bg: 'defaultClientId',    // Default client ID (initially 0xABCD)
+        L: 'externId',            // Registered client ID (after RegisterClient)
+        fk: 'applicationName',    // Application name string
+        Cs: 'supportsPost',       // Supports POST method
+
+        // =============================================================
+        // EventMessage fields
+        // =============================================================
+        dc: 'eventTag',           // Event type ID (2=mousedown, 4=mouseup, 16=mousemove)
+        Rr: 'clientId',           // Client/session ID
+        ss: 'param1',             // Event parameter 1 (packed coords or key code)
+        ts: 'param2',             // Event parameter 2
+
+        // =============================================================
+        // PaintData fields
+        // =============================================================
+        Jd: 'commandCount',       // Number of paint commands
+        bu: 'bufferCapacity',     // Size of internal buffer
+        uk: 'continuation',       // Continuation token (0 = complete)
+
+        // =============================================================
+        // GraphicsState fields
+        // =============================================================
+        oi: 'fillColor',          // Current fill color string
+        Ii: 'strokeColor',        // Current stroke color string
+        Ji: 'lineWidth',          // Current line width
+        Ib: 'fontString',         // Current CSS font string
+        Bg: 'fontSize',           // Current font size in pixels
+        Oo: 'fillColorAlpha',     // Fill color has alpha
+        Po: 'cornerRadiusX',      // Corner radius X
+        Qo: 'cornerRadiusY',      // Corner radius Y
+        la: 'context',            // Canvas 2D rendering context
+        yf: 'hasLineDash',        // Line dash pattern active
+        wf: 'gradient',           // Gradient/pattern object
+
+        // =============================================================
+        // CanvasRenderer fields
+        // =============================================================
+        Y: 'offscreenContext',    // Offscreen canvas 2D context
+        Ea: 'visibleContext',     // Visible canvas 2D context (also on DoubleBuffer, same meaning)
+        Cc: 'commandCache',       // CommandCache instance
+        Di: 'namespaceResolver',  // NamespaceResolver
+
+        // =============================================================
+        // Webvisu (main app) fields
+        // =============================================================
+        s: 'sessionInfo',         // Current SessionInfo (only assigned in Webvisu)
+        ob: 'configuration',      // Current Configuration
+        Sa: 'eventQueue',         // Event message output queue
+        fb: 'visuSession',        // VisuSessionState
+        Sc: 'editControlManager', // EditControlManager instance
+
+        // =============================================================
+        // BinaryBuffer fields and methods
+        // =============================================================
+        Qc: 'uint8View',          // Uint8Array view of buffer
+        Ca: 'writePosition',      // Current write position
+        Hc: 'toArrayBuffer',      // Convert to ArrayBuffer (BinaryBuffer + BinaryBuffer_StringBased + PaintData)
+        oj: 'appendByte',         // Append single byte
+        fm: 'appendBytes',        // Append byte range (src, offset, len)
+        hr: 'ensureCapacity',     // Ensure buffer has capacity
+        Zi: 'setByteAt',          // Set byte at index
+        Hq: 'getByteAt',          // Get byte at index
+
+        // =============================================================
+        // BinaryWriter methods (same on BinaryWriter + BinaryWriter_StringBased)
+        // =============================================================
+        va: 'writeUint8',         // Write unsigned 8-bit integer
+        Wa: 'writeUint16',        // Write unsigned 16-bit integer
+        B: 'writeUint32',         // Write unsigned 32-bit integer
+        Db: 'writeInt16',         // Write signed 16-bit integer
+        ee: 'writeUtf8String',    // Write UTF-8 string
+        Eb: 'writeString',        // Write ISO-8859-1 string
+        em: 'writeFloat32',       // Write 32-bit float
+        aq: 'writeFloat64',       // Write 64-bit double
+        bq: 'writeInt32',         // Write signed 32-bit integer
+        cq: 'writeInt8',          // Write signed 8-bit integer
+        pj: 'writePadding',       // Write padding bytes (0xCC/0xDD alternating)
+
+        // =============================================================
+        // BinaryReader methods (same across all reader implementations)
+        // =============================================================
+        aa: 'readString',         // Read string (count, isWide)
+        Vf: 'readChar',           // Read single character
+        Qe: 'isEof',              // Check if at end of buffer
+        Uf: 'getArrayBuffer',     // Get underlying ArrayBuffer
+        Se: 'getByteOrder',       // Get byte order
+        Ue: 'getTextDecoder',     // Get text decoder
+        S: 'getPosition',         // Get current read/write position (all binary classes)
+        hf: 'alignTo',            // Align to boundary (CommandStreamReader)
+
+        // =============================================================
+        // TlvReader / TlvWriter methods
+        // =============================================================
+        Wf: 'readMbui',           // Read MBUI-encoded value
+        u: 'writeMbui',           // Write MBUI-encoded value
+        Mq: 'calculateMbuiSize',  // Calculate bytes needed for MBUI value
+
+        // =============================================================
+        // Point methods (unique to Point)
+        // =============================================================
+        pe: 'subtract',           // Subtract → new Point
+        Nm: 'subtractInPlace',    // Subtract in place
+        kr: 'scaleInPlace',       // Scale in place
+        rm: 'distanceSquared',    // Distance squared to another point
+
+        // =============================================================
+        // ResponseParser unique methods
+        // =============================================================
+        Pp: 'parsePipeDelimited', // Parse pipe-delimited text response
+        Ww: 'readOldDeviceSessionResult',
+        Vw: 'readNewDeviceSessionResult',
+        cA: 'readNewDeviceCryptResult',
+        dA: 'readOldDeviceCryptResult',
+        bA: 'readFinishTransferResult',
+
+        // =============================================================
+        // MessageBuilder unique methods
+        // =============================================================
+        tv: 'buildEventTlv',      // Convert EventMessage to TLV binary
     };
 
     Object.entries(PROPERTY_RENAMES).forEach(([oldProp, newProp]) => {
@@ -446,6 +597,59 @@ module.exports = function (fileInfo, api) {
             if (!path.node.computed) {
                 path.node.key.name = newProp;
             }
+        });
+    });
+
+    // =====================================================================
+    // Class-scoped property renames — only within constructor + prototype
+    // =====================================================================
+    // These properties have different meanings on different classes, so they
+    // can only be safely renamed within the class's own constructor and
+    // prototype methods (where `this` is known to be the class instance).
+
+    const CLASS_RENAMES = {
+        Point: { c: 'x', f: 'y' },
+    };
+
+    Object.entries(CLASS_RENAMES).forEach(([className, propMap]) => {
+        // Helper: rename this.oldProp → this.newProp within a function body
+        function renameThisProps(fnPath) {
+            Object.entries(propMap).forEach(([oldProp, newProp]) => {
+                j(fnPath).find(j.MemberExpression, {
+                    object: { type: 'ThisExpression' },
+                    property: { type: 'Identifier', name: oldProp }
+                }).forEach((mePath) => {
+                    if (!mePath.node.computed) {
+                        mePath.node.property.name = newProp;
+                    }
+                });
+            });
+        }
+
+        // 1. Find constructor: `ClassName = function(...) { ... }`
+        root.find(j.AssignmentExpression, {
+            left: { type: 'Identifier', name: className },
+            right: { type: 'FunctionExpression' }
+        }).forEach((path) => {
+            renameThisProps(path.get('right'));
+        });
+
+        // 2. Find prototype: `ClassName.prototype = { ... }`
+        root.find(j.AssignmentExpression, {
+            left: {
+                type: 'MemberExpression',
+                object: { type: 'Identifier', name: className },
+                property: { type: 'Identifier', name: 'prototype' }
+            },
+            right: { type: 'ObjectExpression' }
+        }).forEach((path) => {
+            const protoObj = path.node.right;
+            protoObj.properties.forEach((prop) => {
+                // Rename this.props inside each prototype method
+                if (prop.value && prop.value.type === 'FunctionExpression') {
+                    renameThisProps(path.get('right'));
+                }
+            });
         });
     });
 
