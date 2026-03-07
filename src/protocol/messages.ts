@@ -130,7 +130,8 @@ export function parseOpenConnectionResponse(buf: ArrayBuffer): OpenConnectionRes
     commBufferSize: parseInt(parts[0], 10),
     intelByteOrder: parts[1] === '0',
     sessionId: parseInt(parts[2], 10),
-    demoMode: parts[3] === 'true',
+    // webvisu.js maps this field with inverted semantics ("true" => not demo mode).
+    demoMode: parts[3] !== 'true',
     supportsPostMethod: parts[4] === 'true',
   };
 }
