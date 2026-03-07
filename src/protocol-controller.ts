@@ -57,15 +57,39 @@ export class ProtocolController implements IWebVisuController {
   private lastReconnectAt = 0;
 
   constructor() {
-    const protocolHost = config.protocol?.host || '192.168.1.10';
-    const protocolPort = config.protocol?.port || 443;
+    const protocolHost = config.protocol?.host ?? '192.168.1.10';
+    const protocolPort = config.protocol?.port ?? 443;
     const debugRenderEnabled = config.protocol?.debugRenderEnabled ?? false;
+    this.debugRenderer = this.createDebugRenderer(protocolHost, protocolPort, debugRenderEnabled);
+
+    this.client = new WebVisuProtocolClient({
+      host: protocolHost,
+      port: protocolPort,
+      requestTimeout: config.protocol?.requestTimeout ?? 5000,
+      reconnectDelay: config.protocol?.reconnectDelay ?? 5000,
+      postClickDelay: config.protocol?.postClickDelay ?? 50,
+      postSelectDelay: config.protocol?.postSelectDelay ?? 100,
+      debugHttp: config.protocol?.debugHttp ?? false,
+      sessionTraceEnabled: config.protocol?.sessionTraceEnabled ?? true,
+      sessionTraceDir: config.protocol?.sessionTraceDir ?? '/data/protocol-trace',
+      logRawFrameData: config.protocol?.logRawFrameData ?? false,
+      postDataInHeader: config.protocol?.postDataInHeader ?? 'auto',
+      deviceUsername: config.protocol?.deviceUsername ?? '',
+      devicePassword: config.protocol?.devicePassword ?? '',
+      // Always feed paint frames into the renderer so the surface state stays current.
+      onPaintFrame: (frame) => {
+        this.debugRenderer?.record(frame);
+      },
+    });
+  }
+
+  private createDebugRenderer(protocolHost: string, protocolPort: number, debugRenderEnabled: boolean): ProtocolDebugRenderer | null {
     try {
-      this.debugRenderer = new ProtocolDebugRenderer({
+      return new ProtocolDebugRenderer({
         // noDisk=true when debug render is not explicitly enabled — the renderer still
         // accumulates paint state in memory so getRenderedUiImage() always works.
         noDisk: !debugRenderEnabled,
-        outputDir: config.protocol?.debugRenderDir || '/data/protocol-render-debug',
+        outputDir: config.protocol?.debugRenderDir ?? '/data/protocol-render-debug',
         width: config.browser.viewport.width,
         height: config.browser.viewport.height,
         maxFrames: config.protocol?.debugRenderMaxFrames ?? 400,
@@ -87,30 +111,8 @@ export class ProtocolController implements IWebVisuController {
       });
     } catch (error) {
       logger.warn({ error }, 'Failed to initialize protocol debug renderer; rendered-ui endpoint will return empty');
-      this.debugRenderer = null;
+      return null;
     }
-
-    this.client = new WebVisuProtocolClient({
-      host: protocolHost,
-      port: protocolPort,
-      requestTimeout: config.protocol?.requestTimeout || 5000,
-      reconnectDelay: config.protocol?.reconnectDelay || 5000,
-      postClickDelay: config.protocol?.postClickDelay || 50,
-      postSelectDelay: config.protocol?.postSelectDelay || 100,
-      debugHttp: config.protocol?.debugHttp || false,
-      sessionTraceEnabled: config.protocol?.sessionTraceEnabled ?? true,
-      sessionTraceDir: config.protocol?.sessionTraceDir || '/data/protocol-trace',
-      logRawFrameData: config.protocol?.logRawFrameData || false,
-      postDataInHeader: config.protocol?.postDataInHeader || 'auto',
-      deviceUsername: config.protocol?.deviceUsername || '',
-      devicePassword: config.protocol?.devicePassword || '',
-      // Always feed paint frames into the renderer so the surface state stays current.
-      onPaintFrame: this.debugRenderer
-        ? (frame) => {
-          this.debugRenderer?.record(frame);
-        }
-        : undefined,
-    });
   }
 
   async initialize(): Promise<void> {
@@ -120,6 +122,12 @@ export class ProtocolController implements IWebVisuController {
     }
 
     logger.info('Initializing protocol controller...');
+    if (!this.debugRenderer) {
+      const protocolHost = config.protocol?.host ?? '192.168.1.10';
+      const protocolPort = config.protocol?.port ?? 443;
+      const debugRenderEnabled = config.protocol?.debugRenderEnabled ?? false;
+      this.debugRenderer = this.createDebugRenderer(protocolHost, protocolPort, debugRenderEnabled);
+    }
     await this.client.connect();
 
     // Wait until initial screen has visible paint data before any tab click.
@@ -140,6 +148,7 @@ export class ProtocolController implements IWebVisuController {
       } catch (error) {
         logger.warn({ error }, 'Failed to close protocol debug renderer cleanly');
       }
+      this.debugRenderer = null;
     }
     this.initialized = false;
     this.dropdownFirstVisible = 0;
@@ -344,29 +353,45 @@ export class ProtocolController implements IWebVisuController {
         stepCommands.push(...arrowPollCmds);
 
         // Sync state from the arrow-click responses.
-        const snapshot = this.resolveDropdownSnapshot(arrowAllCmds);
+        let snapshot = this.resolveDropdownSnapshot(arrowAllCmds);
+        if (!snapshot) {
+          let closedDetected = this.isDropdownLikelyClosed(arrowAllCmds);
+          if (!closedDetected) {
+            const settled = await this.waitForDropdownSnapshot(
+              arrowAllCmds,
+              `arrow-scroll:${scrollAttempt}`,
+              2000,
+            );
+            arrowAllCmds.push(...settled.commands);
+            stepCommands.push(...settled.commands);
+            snapshot = settled.snapshot;
+            closedDetected = settled.closedDetected;
+          }
+
+          if (!snapshot && closedDetected) {
+            logger.warn({ scrollAttempt, lightId, delta }, 'Dropdown closed during arrow scroll (Ohjaus detected); reopening');
+            const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`arrow-scroll-reopen:${scrollAttempt}`);
+            stepCommands.push(...reopenCmds);
+            snapshot = reopenSnapshot;
+            if (!snapshot) {
+              const reopenSettled = await this.waitForDropdownSnapshot(
+                reopenCmds,
+                `arrow-scroll-reopen:${scrollAttempt}`,
+                2000,
+              );
+              stepCommands.push(...reopenSettled.commands);
+              snapshot = reopenSettled.snapshot;
+            }
+          }
+        }
+
         if (snapshot) {
           this.dropdownFirstVisible = snapshot.firstVisible;
           this.dropdownHandleCenterY = snapshot.handleCenterY;
           latestSnapshot = snapshot;
           logger.info({ scrollAttempt, firstVisible: snapshot.firstVisible }, 'Arrow-scroll snapshot synced');
-        } else if (this.isDropdownLikelyClosed(arrowAllCmds)) {
-          // The "Ohjaus" button label appeared in the arrow-click responses,
-          // meaning the dropdown closed during scrolling. Reopen it — the PLC
-          // retains scroll position within the same session.
-          logger.warn({ scrollAttempt, lightId, delta }, 'Dropdown closed during arrow scroll (Ohjaus detected); reopening');
-          const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`arrow-scroll-reopen:${scrollAttempt}`);
-          stepCommands.push(...reopenCmds);
-          if (reopenSnapshot) {
-            latestSnapshot = reopenSnapshot;
-          } else {
-            this.dropdownFirstVisible += delta;
-          }
         } else {
-          // Dropdown appears open but labels didn't form a consistent snapshot.
-          // Trust arithmetic: each arrow click moves by 1.
-          this.dropdownFirstVisible += delta;
-          logger.info({ scrollAttempt, firstVisible: this.dropdownFirstVisible }, 'Arrow-scroll: no snapshot, trusting arithmetic');
+          throw new Error(`Arrow scroll did not produce stable snapshot: light=${lightId}, index=${index}, target=${targetFirstVisible}, scrollAttempt=${scrollAttempt}`);
         }
         continue;  // Re-check visibility at top of loop
       }
@@ -411,11 +436,23 @@ export class ProtocolController implements IWebVisuController {
       // Reopen the dropdown and sync scroll state.
       const { snapshot: reopenSnapshot, commands: reopenCmds } = await this.reopenDropdownFromClosed(`drag-reopen:${scrollAttempt}`);
       stepCommands.push(...reopenCmds);
-      if (reopenSnapshot) {
-        latestSnapshot = reopenSnapshot;
-      } else {
-        this.dropdownFirstVisible = targetFirstVisible;
+      let snapshotAfterReopen = reopenSnapshot;
+      if (!snapshotAfterReopen) {
+        const settled = await this.waitForDropdownSnapshot(
+          reopenCmds,
+          `drag-reopen:${scrollAttempt}`,
+          2500,
+        );
+        stepCommands.push(...settled.commands);
+        snapshotAfterReopen = settled.snapshot;
       }
+
+      if (!snapshotAfterReopen) {
+        throw new Error(`Drag reopen produced no stable snapshot: light=${lightId}, index=${index}, target=${targetFirstVisible}, scrollAttempt=${scrollAttempt}`);
+      }
+      this.dropdownFirstVisible = snapshotAfterReopen.firstVisible;
+      this.dropdownHandleCenterY = snapshotAfterReopen.handleCenterY;
+      latestSnapshot = snapshotAfterReopen;
 
       if (this.isDropdownIndexVisible(index)) {
         logger.info({ scrollAttempt, firstVisible: this.dropdownFirstVisible, index }, 'Target visible after scroll');
@@ -468,15 +505,15 @@ export class ProtocolController implements IWebVisuController {
     // sends immediately on selection (these are lost with plain mouseDown).
     // After a settle delay, mouseUp goes to the dropdown arrow (safe area) to
     // avoid hitting Ohjaus/panel buttons.
-    const itemClickCmds = await this.client.mouseDownAndCollect(dropdownConfig.itemX, itemY);
+    const itemDownCmds = await this.client.mouseDownAndCollect(dropdownConfig.itemX, itemY);
     const selectionSettleMs = config.protocol?.selectionSettleDelayMs ?? 200;
     await this.delay(selectionSettleMs);
-    await this.client.mouseUp(arrowX, arrowY);
+    const itemUpCmds = await this.client.mouseUpAndCollect(arrowX, arrowY);
 
     // Poll for the header label to appear. The PLC may need several render
     // cycles after mouseUp to redraw the header with the selected item.
-    // Start with the commands captured from the item click mouseDown.
-    const selectCommands: PaintCommand[] = [...itemClickCmds];
+    // Start with both mouseDown and mouseUp responses.
+    const selectCommands: PaintCommand[] = [...itemDownCmds, ...itemUpCmds];
     const headerPollTimeoutMs = 3000;
     const headerPollDeadline = Date.now() + headerPollTimeoutMs;
     let headerLabel: string | null = null;
@@ -849,8 +886,9 @@ export class ProtocolController implements IWebVisuController {
     const expectedName = lightSwitchNames[index];
     const headerLabel = this.extractDropdownHeaderLabel(commands);
     if (headerLabel === null) {
-      logger.warn({ lightId, index, expectedPlcLabel, expectedName }, 'Header text not found in selection commands; cannot verify');
-      return;
+      throw new Error(
+        `Header verification failed: header text missing for light=${lightId}, index=${index}, expected="${expectedPlcLabel}" or "${expectedName}"`
+      );
     }
     const normalizedHeader = this.normalizeVisuText(headerLabel);
     // Accept either the plcLabel or the system name — the PLC may show either in the header.
@@ -1062,6 +1100,45 @@ export class ProtocolController implements IWebVisuController {
       }, 'Detected dropdown scrollbar handle');
     }
     return true;
+  }
+
+  private async waitForDropdownSnapshot(
+    seedCommands: PaintCommand[],
+    reason: string,
+    timeoutMs: number,
+  ): Promise<{
+    snapshot: ReturnType<ProtocolController['resolveDropdownSnapshot']>;
+    commands: PaintCommand[];
+    closedDetected: boolean;
+  }> {
+    const accumulated = [...seedCommands];
+    const additional: PaintCommand[] = [];
+    let snapshot = this.resolveDropdownSnapshot(accumulated);
+    let closedDetected = false;
+
+    if (snapshot || timeoutMs <= 0) {
+      return { snapshot, commands: additional, closedDetected };
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    let poll = 0;
+    while (Date.now() < deadline && !snapshot && !closedDetected) {
+      poll++;
+      const cmds = await this.pollPaintCommands(`dropdown-snapshot:${reason}:${poll}`);
+      additional.push(...cmds);
+      accumulated.push(...cmds);
+      snapshot = this.resolveDropdownSnapshot(accumulated);
+      closedDetected = this.isDropdownLikelyClosed(cmds);
+      if (snapshot || closedDetected) {
+        break;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining > 0) {
+        await this.delay(Math.min(150, remaining));
+      }
+    }
+
+    return { snapshot, commands: additional, closedDetected };
   }
 
   private collectLampImages(commands: PaintCommand[]): ImageDrawCommand[] {
