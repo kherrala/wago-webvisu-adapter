@@ -1014,7 +1014,7 @@ CanvasRenderer.prototype = {
         var c = this.Xw(a),
             d = !1,
             e = this;
-        for (a = 0; a < c.length; ++a) c[a] instanceof DrawImage && !c[a].qz(this.$k, this.namespaceResolver) && (d = !0), c[a] instanceof UnknownCmd41 && !this.a.ba && c[a].h(this);
+        for (a = 0; a < c.length; ++a) c[a] instanceof DrawImage && !c[a].qz(this.$k, this.namespaceResolver) && (d = !0), c[a] instanceof InvalidateDisplay && !this.a.ba && c[a].h(this);
         this.ot() ? (d ? (Logger.b("Waiting for image(s) to load"), this.$k.qy(function() {
             Logger.b("Loading image(s) finished so continue with drawing");
             e.lo(c, b)
@@ -1054,7 +1054,7 @@ CanvasRenderer.prototype = {
         if (this.a.visuSession.$j) {
             for (c = 0; c < a.length; ++c) {
                 var e = a[c];
-                (e instanceof ExtendedCmd8194 || e instanceof ExtendedCmd8192 || e instanceof ExtendedCmd8193) && e.h(this)
+                (e instanceof SetSessionTimeout || e instanceof NavigateSession || e instanceof ExecuteSessionScript) && e.h(this)
             }
             for (c = 0; c < a.length; ++c) e = a[c];
             this.offscreenContext.restore()
@@ -1066,9 +1066,9 @@ CanvasRenderer.prototype = {
             this.offscreenContext.restore()
         } else {
             var f = [];
-            for (c = 0; c < a.length; ++c) e = a[c], e instanceof ClearRect ? e.h(this) : e instanceof RectDrawVariant && f.push(e);
+            for (c = 0; c < a.length; ++c) e = a[c], e instanceof ClearRect ? e.h(this) : e instanceof DrawTooltip && f.push(e);
             this.ti.eq(this.offscreenContext);
-            for (c = 0; c < a.length; ++c) e = a[c], e instanceof ClearRect || e instanceof RectDrawVariant || e instanceof UnknownCmd41 || a[c].h(this);
+            for (c = 0; c < a.length; ++c) e = a[c], e instanceof ClearRect || e instanceof DrawTooltip || e instanceof InvalidateDisplay || a[c].h(this);
             this.offscreenContext.restore();
             for (c = 0; c < f.length; ++c) f[c].h(this)
         }
@@ -5245,9 +5245,9 @@ NamespaceResolver.prototype = {
         }
     }
 };
-var UnknownCmd41;
-UnknownCmd41 = function() {};
-UnknownCmd41.prototype = {
+var InvalidateDisplay;
+InvalidateDisplay = function() {};
+InvalidateDisplay.prototype = {
     h: function(a) {
         if (a.a.ba) {
             var b = a.a.U().ma();
@@ -5293,9 +5293,9 @@ SetClipRect.prototype = {
         a.clip()
     }
 };
-var UnknownCmd16;
-UnknownCmd16 = function() {};
-UnknownCmd16.prototype = {
+var CloseTooltip;
+CloseTooltip = function() {};
+CloseTooltip.prototype = {
     h: function(a) {
         (a = a.a.Tl) && a.lq()
     }
@@ -5591,8 +5591,8 @@ DrawPrimitive.prototype = {
         this.Yx.yj(a)
     }
 };
-var UnknownCmd31;
-UnknownCmd31 = function(a, b) {
+var DrawShapeAtPen;
+DrawShapeAtPen = function(a, b) {
     this.ce = b.getUint16();
     a = b.getUint16();
     var c = b.getUint16();
@@ -5605,7 +5605,7 @@ UnknownCmd31 = function(a, b) {
     this.Xx = 0 !== (b & 2);
     this.Wl = 0 !== (b & 4)
 };
-UnknownCmd31.prototype = {
+DrawShapeAtPen.prototype = {
     h: function(a) {
         var b = a.getState().zl;
         var c = new Point(b.c + this.Ml.width, b.f + this.Ml.height);
@@ -5946,16 +5946,16 @@ DrawText.prototype = {
         return GeometryUtil.Ia(a, b, !0);
     }
 };
-var RectDrawVariant;
+var DrawTooltip;
 (function() {
     var a = null;
-    RectDrawVariant = function(b, c) {
+    DrawTooltip = function(b, c) {
         var d = c.getUint16();
         this.ea = c.readString(d, 15 === b);
         this.j = GeometryUtil.Lb(c);
         this.kp = 1 === (c.getUint32() & 1)
     };
-    RectDrawVariant.prototype = {
+    DrawTooltip.prototype = {
         h: function(b) {
             var c = b.getContext(),
                 d = GeometryUtil.re(this.ea),
@@ -6038,26 +6038,26 @@ NoOpPaintCommand = function() {};
 NoOpPaintCommand.prototype = {
     h: function() {}
 };
-var UnknownCmd12;
-UnknownCmd12 = function(a, b) {
+var SetEditControlState;
+SetEditControlState = function(a, b) {
     a = b.getUint16();
     this.Ht = 0 === a || 2 === a
 };
-UnknownCmd12.prototype = {
+SetEditControlState.prototype = {
     h: function(a) {
         this.Ht && a.a.editControlManager.close();
         a.a.editControlManager.nA()
     }
 };
-var UnknownCmd17;
-UnknownCmd17 = function(a, b, c) {
+var ExecuteSystemAction;
+ExecuteSystemAction = function(a, b, c) {
     var d = b.getPosition();
     this.It = b.getUint16();
     a = b.getUint16();
     this.Vn = b.readString(a, !1);
     c >= b.getPosition() - d + 10 ? (a = b.getUint16(), this.Wn = b.readString(a, !1)) : this.Wn = ""
 };
-UnknownCmd17.prototype = {
+ExecuteSystemAction.prototype = {
     h: function() {
         switch (this.It) {
             case 0:
@@ -6076,20 +6076,20 @@ UnknownCmd17.prototype = {
         "replace" === this.Wn ? window.location.href = this.Vn : window.open(this.Vn)
     }
 };
-var UnknownCmd68;
-UnknownCmd68 = function(a, b) {
+var FileTransferInitiate;
+FileTransferInitiate = function(a, b) {
     this.vg = b.getUint8();
     this.vg = 0 === this.vg ? 2 : 3;
     this.ni = new ProtocolDataPacket(b)
 };
-UnknownCmd68.prototype = {
+FileTransferInitiate.prototype = {
     h: function(a) {
         var b = new FileTransferStream(0, this.vg, this.ni.Iv, null, this.ni);
         a.a.$f(b)
     }
 };
-var UnknownCmd69;
-UnknownCmd69 = function(a, b, c, d) {
+var FileTransferDataChunk;
+FileTransferDataChunk = function(a, b, c, d) {
     a = d.a.g;
     c = 0;
     this.lc = b.getUint32();
@@ -6102,7 +6102,7 @@ UnknownCmd69 = function(a, b, c, d) {
     0 !== (this.lc & 1) && (a.status.qc ? (a.status.qc = !1, a.status.Gc = !0) : a.status.Fc = !0);
     0 === d && (a.status.Fc = !0)
 };
-UnknownCmd69.prototype = {
+FileTransferDataChunk.prototype = {
     h: function() {}
 };
 var FileTransferCommand;
@@ -6315,8 +6315,8 @@ NativeControlFlags.prototype = {
         this.hu ? WebvisuExtensionMgr.pm(this.Ae) : WebvisuExtensionMgr.Ey(this.Ae, this.Ax)
     }
 };
-var FillRelatedState;
-FillRelatedState = function(a, b) {
+var CreateEditControl;
+CreateEditControl = function(a, b) {
     var c;
     b.getUint16();
     b.getUint16();
@@ -6337,7 +6337,7 @@ FillRelatedState = function(a, b) {
     a = f;
     0 < a ? (this.Yh && (a /= 2), b = BinaryReader.b(e.toArrayBuffer(), b.getByteOrder(), b.getTextDecoder()), this.So = b.readString(a, this.Yh)) : this.So = ""
 };
-FillRelatedState.prototype = {
+CreateEditControl.prototype = {
     h: function(a) {
         var b = window.document.createElement("input"),
             c = this.ht(),
@@ -6370,8 +6370,8 @@ var PaintCommandFactory;
         b = null;
     PaintCommandFactory = function() {};
     PaintCommandFactory.createCommand = function(c, d, e, f) {
-        null === a && (a = [NoOpPaintCommand, DrawPrimitive, DrawPolygon, DrawText, SetFillColor, SetPenStyle, SetFont, ClearRect, SetClipRect, RestoreClipRect, FillRelatedState, DrawText, UnknownCmd12, NoOpPaintCommand, RectDrawVariant, RectDrawVariant, UnknownCmd16, UnknownCmd17, SetDrawMode, DrawImage, UnknownCmd20, UnknownCmd21_22, UnknownCmd21_22, Fill3DRect, UnknownCmd24, FillRelatedState, NativeControlCreate, ExtensionMethodCall, NativeControlResize, NativeControlFlags, AreaGradientStyle, UnknownCmd31, UnknownCmd32, UnknownCmd33_34, UnknownCmd33_34, UnknownCmd35, DrawArc, InitVisualization, NoOpPaintCommand, NoOpPaintCommand, NoOpPaintCommand, UnknownCmd41, TouchHandlingFlags, TouchRectangles, DrawPixels, DrawPrimitive, DrawText, DrawText, AreaGradientStyle, UnknownCmd49, UnknownCmd50, UnknownCmd51_52, UnknownCmd51_52, UnknownCmd53, UnknownCmd54, UnknownCmd55, UnknownCmd56, UnknownCmd57, UnknownCmd58, DrawPolygon, DrawPrimitive, DrawPrimitive, NoOpPaintCommand, NoOpPaintCommand, NoOpPaintCommand, NoOpPaintCommand, SetRenderParameter, FileTransferCommand, UnknownCmd68, UnknownCmd69, NoOpPaintCommand, UnknownCmd71, UnknownCmd72, SetCornerRadius, UnknownCmd74, UnknownCmd75, UnknownCmd76, UnknownCmd77, UnknownCmd78, UnknownCmd79, UnknownCmd80, UnknownCmd81, UnknownCmd82, UnknownCmd83, NoOpPaintCommand, UnknownCmd85, UnknownCmd86, UnknownCmd87, UnknownCmd88, UnknownCmd89, UnknownCmd90, UnknownCmd91, UnknownCmd92, ClearRectAndClip, DrawDomImage, NoOpPaintCommand, SetLayerVisibility, NoOpPaintCommand, UnknownCmd98, UnknownCmd99, UnknownCmd101, UnknownCmd100, UnknownCmd102, UnknownCmd103, UnknownCmd104, ClearFullContext, SetCompositeMode]);
-        null === b && (b = [ExtendedCmd8192, ExtendedCmd8193, ExtendedCmd8194]);
+        null === a && (a = [NoOpPaintCommand, DrawPrimitive, DrawPolygon, DrawText, SetFillColor, SetPenStyle, SetFont, ClearRect, SetClipRect, RestoreClipRect, CreateEditControl, DrawText, SetEditControlState, NoOpPaintCommand, DrawTooltip, DrawTooltip, CloseTooltip, ExecuteSystemAction, SetDrawMode, DrawImage, ExecuteClientProgram, OpenFileDialog, OpenFileDialog, Fill3DRect, SetCursorStyle, CreateEditControl, NativeControlCreate, ExtensionMethodCall, NativeControlResize, NativeControlFlags, AreaGradientStyle, DrawShapeAtPen, ClearTextMeasureCache, MeasureTextMetrics, MeasureTextMetrics, SendTextMetricsEvent, DrawArc, InitVisualization, NoOpPaintCommand, NoOpPaintCommand, NoOpPaintCommand, InvalidateDisplay, TouchHandlingFlags, TouchRectangles, DrawPixels, DrawPrimitive, DrawText, DrawText, AreaGradientStyle, RegisterNamespaces, ClearTextBreakCache, PopulateTextBreakCache, PopulateTextBreakCache, SendTextBreakData, AllocateDoubleBuffer, FreeDoubleBuffer, InvalidateBuffer, CommitDoubleBuffer, SetGlyphMetrics, DrawPolygon, DrawPrimitive, DrawPrimitive, NoOpPaintCommand, NoOpPaintCommand, NoOpPaintCommand, NoOpPaintCommand, SetRenderParameter, FileTransferCommand, FileTransferInitiate, FileTransferDataChunk, NoOpPaintCommand, DrawTextASCII, DrawTextUnicode, SetCornerRadius, CreateUIElement, UpdateContainerLayout, RemoveUIElement, ResetContainer, ClearAndComposite, CreateMenuItem, ConfigureDrawingContext, SelectLayer, ResetLayerStack, SetTransformMatrix, NoOpPaintCommand, SetStrokeStyle, CreateDynamicControl, SetElementProperties, OpenModalDialog, SwitchMainView, AnimateWithOpacity, CloseDialog, RefreshVisualization, ClearRectAndClip, DrawDomImage, NoOpPaintCommand, SetLayerVisibility, NoOpPaintCommand, LogEvent, ClearModalState, HideMultipleElements, DeleteMultipleElements, DeactivateLayer, SetLayerPosition, AnimateElementTransform, ClearFullContext, SetCompositeMode]);
+        null === b && (b = [NavigateSession, ExecuteSessionScript, SetSessionTimeout]);
         return c < a.length ? new a[c](c, d, e, f) : 8192 <= c && 9215 >= c && c - 8192 < b.length ? new b[c - 8192](c,
             d, e, f) : new NoOpPaintCommand(c, d, e, f);
     }
@@ -6634,14 +6634,14 @@ var GeometryUtil;
         r && d.stroke()
     }
 })();
-var UnknownCmd98;
-UnknownCmd98 = function(a, b) {
+var LogEvent;
+LogEvent = function(a, b) {
     this.dw = b.getUint16();
     this.ew = b.getUint16();
     a = b.getUint16();
     this.ea = b.readString(a, !1)
 };
-UnknownCmd98.prototype = {
+LogEvent.prototype = {
     h: function() {
         var a = Util.i("Message ID: {0}   Message description: {1}", this.ew, this.ea);
         switch (this.dw) {
@@ -6705,8 +6705,8 @@ SetRenderParameter.prototype = {
         }
     }
 };
-var UnknownCmd24;
-UnknownCmd24 = function(a, b) {
+var SetCursorStyle;
+SetCursorStyle = function(a, b) {
     switch (b.getUint16()) {
         case 0:
             this.pb = "pointer";
@@ -6754,7 +6754,7 @@ UnknownCmd24 = function(a, b) {
             this.pb = "default"
     }
 };
-UnknownCmd24.prototype = {
+SetCursorStyle.prototype = {
     h: function(a) {
         a.a.ba ? (a = a.a.U().ma(), null !== a && (a = a.ha, null !== a && (a.style.cursor = this.pb))) : a.offscreenContext.canvas.style.cursor = this.pb
     }
@@ -6876,8 +6876,8 @@ DrawDomImage.prototype = {
         return b
     }
 };
-var UnknownCmd49;
-UnknownCmd49 = function(a, b, c, d) {
+var RegisterNamespaces;
+RegisterNamespaces = function(a, b, c, d) {
     var e;
     a = b.getUint16();
     var f = [];
@@ -6898,7 +6898,7 @@ UnknownCmd49 = function(a, b, c, d) {
     }
     d.namespaceResolver.vA(this.wb)
 };
-UnknownCmd49.prototype = {
+RegisterNamespaces.prototype = {
     h: function() {}
 };
 var SetPenStyle;
@@ -7015,29 +7015,29 @@ RestoreClipRect.prototype = {
         a.getState().apply()
     }
 };
-var UnknownCmd100;
-UnknownCmd100 = function(a, b) {
+var DeleteMultipleElements;
+DeleteMultipleElements = function(a, b) {
     a = b.getInt16();
     this.Ai = Util.ig(b, a)
 };
-UnknownCmd100.prototype = {
+DeleteMultipleElements.prototype = {
     h: function(a) {
         var b = this.Ai.length - 1,
             c = a.a.U();
         for (a = 0; a <= b; ++a) c.Te()
     }
 };
-var UnknownCmd77;
-UnknownCmd77 = function(a, b) {
+var ResetContainer;
+ResetContainer = function(a, b) {
     this.Ua = b.getInt16()
 };
-UnknownCmd77.prototype = {
+ResetContainer.prototype = {
     h: function(a) {
         a.a.U().Te()
     }
 };
-var UnknownCmd74;
-UnknownCmd74 = function(a, b) {
+var CreateUIElement;
+CreateUIElement = function(a, b) {
     this.Ua = b.getInt16();
     a = b.getUint32();
     this.Av = 0 !== (a & 1);
@@ -7049,7 +7049,7 @@ UnknownCmd74 = function(a, b) {
     this.Gt = 0 === (a & 64);
     this.Zh = 0 === (a & 128)
 };
-UnknownCmd74.prototype = {
+CreateUIElement.prototype = {
     h: function(a) {
         var b = UIElementFactory.Kz(a.a, this.yv, this.zv, this.Av, this.Lv, this.Px, this.et, this.Gt);
         a.a.U().Xp(this.Ua, b);
@@ -7057,47 +7057,47 @@ UnknownCmd74.prototype = {
         b.Jc()
     }
 };
-var UnknownCmd82;
-UnknownCmd82 = function(a, b) {
+var ResetLayerStack;
+ResetLayerStack = function(a, b) {
     this.Ab = b.getInt16()
 };
-UnknownCmd82.prototype = {
+ResetLayerStack.prototype = {
     h: function(a) {
         a.a.U().ma().Wy()
     }
 };
-var UnknownCmd79;
-UnknownCmd79 = function(a, b, c) {
+var CreateMenuItem;
+CreateMenuItem = function(a, b, c) {
     this.Ab = b.getInt16();
     this.xf = 2 < c ? 0 !== (b.getUint32() & 1) : !1
 };
-UnknownCmd79.prototype = {
+CreateMenuItem.prototype = {
     h: function(a) {
         var b = UIElementFactory.Dz(32767 === this.Ab, this.xf);
         a.a.U().ma().iy(this.Ab, b)
     }
 };
-var UnknownCmd99;
-UnknownCmd99 = function(a, b) {
+var ClearModalState;
+ClearModalState = function(a, b) {
     this.Ab = b.getInt16()
 };
-UnknownCmd99.prototype = {
+ClearModalState.prototype = {
     h: function(a) {
         a = a.a.U().ma();
         32767 === this.Ab && a.gr()
     }
 };
-var UnknownCmd81;
-UnknownCmd81 = function(a, b) {
+var SelectLayer;
+SelectLayer = function(a, b) {
     this.Ab = b.getInt16()
 };
-UnknownCmd81.prototype = {
+SelectLayer.prototype = {
     h: function(a) {
         a.a.U().ma().dB(this.Ab)
     }
 };
-var UnknownCmd80;
-UnknownCmd80 = function(a, b, c) {
+var ConfigureDrawingContext;
+ConfigureDrawingContext = function(a, b, c) {
     a = b.getPosition();
     this.Dc = b.getInt16();
     this.Ec = b.getInt16();
@@ -7108,16 +7108,16 @@ UnknownCmd80 = function(a, b, c) {
     this.Vs = b.getUint8();
     c >= b.getPosition() - a + 9 ? (this.Sn = b.getInt16(), this.Tn = b.getInt16(), this.Rn = b.getInt16(), this.Qn = b.getInt16()) : (this.Tn = this.Sn = 0, this.Qn = this.Rn = -1)
 };
-UnknownCmd80.prototype = {
+ConfigureDrawingContext.prototype = {
     h: function(a) {
         a.a.U().ma().rB(this.Dc, this.Ec, this.ua, this.za, this.rx, this.sx, this.Vs, this.Sn, this.Tn, this.Rn, this.Qn)
     }
 };
-var UnknownCmd102;
-UnknownCmd102 = function(a, b) {
+var DeactivateLayer;
+DeactivateLayer = function(a, b) {
     this.Lt = b.getInt16()
 };
-UnknownCmd102.prototype = {
+DeactivateLayer.prototype = {
     h: function(a) {
         var b = a.a.U().ma();
         (null !== b ? b.U() : a.a.U()).DA(this.Lt)
@@ -7133,18 +7133,18 @@ SetLayerVisibility.prototype = {
         (null !== b ? b.U() : a.a.U()).Mm(this.xd)
     }
 };
-var UnknownCmd103;
-UnknownCmd103 = function(a, b) {
+var SetLayerPosition;
+SetLayerPosition = function(a, b) {
     this.ox = b.getFloat32();
     this.px = b.getFloat32()
 };
-UnknownCmd103.prototype = {
+SetLayerPosition.prototype = {
     h: function(a) {
         a.a.U().ma().bB(this.ox, this.px)
     }
 };
-var UnknownCmd85;
-UnknownCmd85 = function(a, b) {
+var SetStrokeStyle;
+SetStrokeStyle = function(a, b) {
     this.Ce = b.getInt16();
     a = b.getInt16();
     switch (a) {
@@ -7163,14 +7163,14 @@ UnknownCmd85 = function(a, b) {
     this.Nv = 5 === a;
     this.tf = b.getUint32()
 };
-UnknownCmd85.prototype = {
+SetStrokeStyle.prototype = {
     h: function(a) {
         var b = this.Nv ? GeometryUtil.i(this.tf & 16777215) : !0 === a.a.getConfiguration().SemiTransparencyActive ? GeometryUtil.i(this.tf) : GeometryUtil.b(this.tf);
         a.a.U().ma().FA(this.Ce, this.uf, b)
     }
 };
-var UnknownCmd83;
-UnknownCmd83 = function(a, b) {
+var SetTransformMatrix;
+SetTransformMatrix = function(a, b) {
     this.Ng = b.getInt32();
     this.Og = b.getInt32();
     this.Lg = b.getInt32();
@@ -7178,14 +7178,14 @@ UnknownCmd83 = function(a, b) {
     this.kd = b.getInt32();
     this.ld = b.getInt32()
 };
-UnknownCmd83.prototype = {
+SetTransformMatrix.prototype = {
     h: function(a) {
         a.a.U().ma().UA(this.Ng, this.Og, this.Lg, this.Mg, this.kd, this.ld)
     }
 };
-var UnknownCmd78;
-UnknownCmd78 = function() {};
-UnknownCmd78.prototype = {
+var ClearAndComposite;
+ClearAndComposite = function() {};
+ClearAndComposite.prototype = {
     h: function(a) {
         a.a.U().Dm();
         var b = a.getContext(),
@@ -7198,28 +7198,28 @@ UnknownCmd78.prototype = {
         a.a.wc.Mj(this.l)
     }
 };
-var UnknownCmd101;
-UnknownCmd101 = function(a, b) {
+var HideMultipleElements;
+HideMultipleElements = function(a, b) {
     a = b.getInt16();
     this.Ai = Util.ig(b, a)
 };
-UnknownCmd101.prototype = {
+HideMultipleElements.prototype = {
     h: function(a) {
         var b, c = this.Ai.length - 1;
         for (b = 0; b <= c; b++) a.a.U().wh(this.Ai[b])
     }
 };
-var UnknownCmd76;
-UnknownCmd76 = function(a, b) {
+var RemoveUIElement;
+RemoveUIElement = function(a, b) {
     this.Ua = b.getInt16()
 };
-UnknownCmd76.prototype = {
+RemoveUIElement.prototype = {
     h: function(a) {
         a.a.U().wh(this.Ua)
     }
 };
-var UnknownCmd75;
-UnknownCmd75 = function(a, b) {
+var UpdateContainerLayout;
+UpdateContainerLayout = function(a, b) {
     this.Dc = b.getInt16();
     this.Ec = b.getInt16();
     this.ua = b.getInt16();
@@ -7232,7 +7232,7 @@ UnknownCmd75 = function(a, b) {
     this.Zb = b.getInt16();
     this.Uc = b.getUint32()
 };
-UnknownCmd75.prototype = {
+UpdateContainerLayout.prototype = {
     h: function(a) {
         this.Zb || (this.Zb = 0);
         var b = a.a.U().ma(),
@@ -7253,8 +7253,8 @@ UnknownCmd75.prototype = {
         a.update(this.Dc, this.Ec, this.ua, this.za, this.Wc, this.Xc, this.Me, this.Ne, this.Ka, this.Uc, b)
     }
 };
-var UnknownCmd104;
-UnknownCmd104 = function(a, b) {
+var AnimateElementTransform;
+AnimateElementTransform = function(a, b) {
     this.Dc = b.getInt16();
     this.Ec = b.getInt16();
     this.ua = b.getInt16();
@@ -7267,7 +7267,7 @@ UnknownCmd104 = function(a, b) {
     this.Zb = b.getInt16();
     this.Uc = b.getUint32()
 };
-UnknownCmd104.prototype = {
+AnimateElementTransform.prototype = {
     h: function(a) {
         this.Zb || (this.Zb = 0);
         var b = a.a.U().ma(),
@@ -7278,29 +7278,29 @@ UnknownCmd104.prototype = {
             this.Ne, this.Ka, this.Uc, c)
     }
 };
-var UnknownCmd89;
-UnknownCmd89 = function(a, b) {
+var SwitchMainView;
+SwitchMainView = function(a, b) {
     this.Ua = b.getInt16();
     this.xd = b.getInt16()
 };
-UnknownCmd89.prototype = {
+SwitchMainView.prototype = {
     h: function(a) {
         a.a.ba && a.a.Tl.lq();
         a.a.yy(this.Ua);
         a.a.kc.Mm(this.xd)
     }
 };
-var UnknownCmd92;
-UnknownCmd92 = function(a, b) {
+var RefreshVisualization;
+RefreshVisualization = function(a, b) {
     this.Ua = b.getInt16()
 };
-UnknownCmd92.prototype = {
+RefreshVisualization.prototype = {
     h: function(a) {
         a.a.Vy()
     }
 };
-var UnknownCmd88;
-UnknownCmd88 = function(a, b) {
+var OpenModalDialog;
+OpenModalDialog = function(a, b) {
     this.Ua = b.getInt16();
     this.xd = b.getInt16();
     a = b.getUint32();
@@ -7323,7 +7323,7 @@ UnknownCmd88 = function(a, b) {
     this.Jt = 0 !== (a & 16384);
     this.Qv = 0 !== (a & 32768)
 };
-UnknownCmd88.prototype = {
+OpenModalDialog.prototype = {
     h: function(a) {
         a.a.kc.Mm(this.xd);
         var b = UIElementFactory.pz(this.ga, this.$l, a.a, this.Jt),
@@ -7334,17 +7334,17 @@ UnknownCmd88.prototype = {
         a.a.openDialog(this.Ua, b)
     }
 };
-var UnknownCmd91;
-UnknownCmd91 = function(a, b) {
+var CloseDialog;
+CloseDialog = function(a, b) {
     this.Ua = b.getInt16()
 };
-UnknownCmd91.prototype = {
+CloseDialog.prototype = {
     h: function(a) {
         a.a.cB(this.Ua)
     }
 };
-var UnknownCmd90;
-UnknownCmd90 = function(a, b) {
+var AnimateWithOpacity;
+AnimateWithOpacity = function(a, b) {
     this.Dc = b.getInt16();
     this.Ec = b.getInt16();
     this.ua = b.getInt16();
@@ -7353,7 +7353,7 @@ UnknownCmd90 = function(a, b) {
     a = b.getUint32();
     this.Rc = GeometryUtil.i(a)
 };
-UnknownCmd90.prototype = {
+AnimateWithOpacity.prototype = {
     h: function(a) {
         a = a.a.U().ma();
         var b = "";
@@ -7405,8 +7405,8 @@ TransferStatus.pa = 3;
 TransferStatus.R = 4;
 TransferStatus.fa = 19;
 TransferStatus.b = 20;
-var UnknownCmd87;
-UnknownCmd87 = function(a, b) {
+var SetElementProperties;
+SetElementProperties = function(a, b) {
     a = b.getUint16();
     this.Li = b.readString(a, !1);
     a = b.getUint16();
@@ -7417,7 +7417,7 @@ UnknownCmd87 = function(a, b) {
         this.Tg.push(this.xl(b, d, e))
     }
 };
-UnknownCmd87.prototype = {
+SetElementProperties.prototype = {
     h: function(a) {
         a.a.U().ma().sy(this.Li, this.Tg)
     },
@@ -7467,72 +7467,72 @@ UnknownCmd87.prototype = {
         return BinaryReader.b(c.toArrayBuffer(), a.getByteOrder(), a.getTextDecoder());
     }
 };
-var UnknownCmd86;
-UnknownCmd86 = function(a, b) {
+var CreateDynamicControl;
+CreateDynamicControl = function(a, b) {
     a = b.getUint16();
     this.Ku = b.readString(a, !1)
 };
-UnknownCmd86.prototype = {
+CreateDynamicControl.prototype = {
     h: function(a) {
         var b = UIElementFactory.Iz(this.Ku);
         a.a.U().ma().PA(b)
     }
 };
-var UnknownCmd20;
-UnknownCmd20 = function() {};
-UnknownCmd20.prototype = {
+var ExecuteClientProgram;
+ExecuteClientProgram = function() {};
+ExecuteClientProgram.prototype = {
     h: function() {
         Logger.warn("The functionality ExecuteClientProgram is not possible in the webvisualization.")
     }
 };
-var UnknownCmd21_22;
-UnknownCmd21_22 = function() {};
-UnknownCmd21_22.prototype = {
+var OpenFileDialog;
+OpenFileDialog = function() {};
+OpenFileDialog.prototype = {
     h: function() {
         Logger.warn("The functionality OpenFileDialog is not possible in the webvisualization.")
     }
 };
-var ExtendedCmd8192;
-ExtendedCmd8192 = function(a, b) {
+var NavigateSession;
+NavigateSession = function(a, b) {
     a = b.getUint16();
     this.Ig = b.readString(a, !1);
     this.Vg = b.getUint16()
 };
-ExtendedCmd8192.prototype = {
+NavigateSession.prototype = {
     h: function(a) {
         a = a.a.visuSession;
         null !== a && (a.NA(this.Ig), a.SA(this.Vg))
     }
 };
-var ExtendedCmd8194;
-ExtendedCmd8194 = function(a, b) {
+var SetSessionTimeout;
+SetSessionTimeout = function(a, b) {
     this.jw = b.getUint32()
 };
-ExtendedCmd8194.prototype = {
+SetSessionTimeout.prototype = {
     h: function(a) {
         a.a.visuSession.rr(this.jw)
     }
 };
-var ExtendedCmd8193;
-ExtendedCmd8193 = function(a, b) {
+var ExecuteSessionScript;
+ExecuteSessionScript = function(a, b) {
     a = b.getUint16();
     this.fj = b.readString(a, !1)
 };
-ExtendedCmd8193.prototype = {
+ExecuteSessionScript.prototype = {
     h: function(a) {
         a = a.a.visuSession;
         null !== a && a.$A(this.fj)
     }
 };
-var UnknownCmd54;
-UnknownCmd54 = function(a, b) {
+var AllocateDoubleBuffer;
+AllocateDoubleBuffer = function(a, b) {
     this.Ab = b.getUint16();
     this.ua = b.getUint16();
     this.za = b.getUint16();
     this.jb = b.getUint32();
     this.Lr = 1
 };
-UnknownCmd54.prototype = {
+AllocateDoubleBuffer.prototype = {
     h: function(a) {
         var b = null,
             c = Util.Ye(this.ua - 1, this.za - 1).getContext("2d");
@@ -7542,18 +7542,18 @@ UnknownCmd54.prototype = {
         a.commandCache.ky(this.Ab, new DoubleBuffer(c, b, new Size(this.ua, this.za)))
     }
 };
-var UnknownCmd55;
-UnknownCmd55 = function(a, b) {
+var FreeDoubleBuffer;
+FreeDoubleBuffer = function(a, b) {
     this.Ab = b.getUint16()
 };
-UnknownCmd55.prototype = {
+FreeDoubleBuffer.prototype = {
     h: function(a) {
         a.commandCache.jA(this.Ab);
         a.a.W.sa.vz(this.Ab)
     }
 };
-var UnknownCmd58;
-UnknownCmd58 = function(a, b) {
+var SetGlyphMetrics;
+SetGlyphMetrics = function(a, b) {
     this.Ox = b.getUint32();
     this.Dv = b.getUint16();
     this.zi = b.getUint16();
@@ -7561,26 +7561,26 @@ UnknownCmd58 = function(a, b) {
     this.ml = !!b.getUint8();
     this.ql = new Point(b.getUint16(), b.getUint16())
 };
-UnknownCmd58.prototype = {
+SetGlyphMetrics.prototype = {
     h: function(a) {
         var b = new GlyphMetrics(this.zi, this.ll, this.ml, this.ql);
         a.a.W.sa.jz(this.Ox).info().Gr(this.Dv, b)
     }
 };
-var UnknownCmd56;
-UnknownCmd56 = function(a, b) {
+var InvalidateBuffer;
+InvalidateBuffer = function(a, b) {
     this.Ab = b.getUint16()
 };
-UnknownCmd56.prototype = {
+InvalidateBuffer.prototype = {
     h: function(a) {
         a.commandCache.Yz(this.Ab)
     }
 };
-var UnknownCmd57;
-UnknownCmd57 = function(a, b) {
+var CommitDoubleBuffer;
+CommitDoubleBuffer = function(a, b) {
     this.Ab = b.getUint16()
 };
-UnknownCmd57.prototype = {
+CommitDoubleBuffer.prototype = {
     h: function(a) {
         var b = a.commandCache.Nj(a.commandCache.bm());
         !b.Cf && a.Ie && b.ei.drawImage(b.visibleContext.canvas, 0, 0);
@@ -7588,9 +7588,9 @@ UnknownCmd57.prototype = {
         a.commandCache.Wz()
     }
 };
-var UnknownCmd53;
-UnknownCmd53 = function() {};
-UnknownCmd53.prototype = {
+var SendTextBreakData;
+SendTextBreakData = function() {};
+SendTextBreakData.prototype = {
     h: function(a) {
         var b = a.a.eventQueue,
             c = a.Rl,
@@ -7603,9 +7603,9 @@ UnknownCmd53.prototype = {
         b.push(a)
     }
 };
-var UnknownCmd35;
-UnknownCmd35 = function() {};
-UnknownCmd35.prototype = {
+var SendTextMetricsEvent;
+SendTextMetricsEvent = function() {};
+SendTextMetricsEvent.prototype = {
     h: function(a) {
         var b = a.a.eventQueue,
             c = a.ej,
@@ -7618,44 +7618,44 @@ UnknownCmd35.prototype = {
         b.push(a)
     }
 };
-var UnknownCmd51_52;
-UnknownCmd51_52 = function(a, b) {
+var PopulateTextBreakCache;
+PopulateTextBreakCache = function(a, b) {
     var c = b.getUint16();
     this.ea = b.readString(c, 52 === a)
 };
-UnknownCmd51_52.prototype = {
+PopulateTextBreakCache.prototype = {
     h: function(a) {
         a.getContext().font = a.getState().fontString;
         a.Rl.jy(this.ea)
     }
 };
-var UnknownCmd33_34;
-UnknownCmd33_34 = function(a, b) {
+var MeasureTextMetrics;
+MeasureTextMetrics = function(a, b) {
     var c = b.getUint16();
     this.ea = b.readString(c, 34 === a)
 };
-UnknownCmd33_34.prototype = {
+MeasureTextMetrics.prototype = {
     h: function(a) {
         a.getContext().font = a.getState().fontString;
         a.ej.Yp(this.ea)
     }
 };
-var UnknownCmd50;
-UnknownCmd50 = function(a, b) {
+var ClearTextBreakCache;
+ClearTextBreakCache = function(a, b) {
     b.getUint32();
     b.getUint32()
 };
-UnknownCmd50.prototype = {
+ClearTextBreakCache.prototype = {
     h: function(a) {
         a.Rl.clear()
     }
 };
-var UnknownCmd32;
-UnknownCmd32 = function(a, b) {
+var ClearTextMeasureCache;
+ClearTextMeasureCache = function(a, b) {
     b.getUint32();
     b.getUint32()
 };
-UnknownCmd32.prototype = {
+ClearTextMeasureCache.prototype = {
     h: function(a) {
         a.ej.clear()
     }
@@ -7672,22 +7672,22 @@ FontTextCommand.prototype = {
         a.ej.Yp(this.ea, this.bt, this.Kx)
     }
 };
-var UnknownCmd71;
-UnknownCmd71 = function(a, b, c) {
+var DrawTextASCII;
+DrawTextASCII = function(a, b, c) {
     var d = b.getUint16();
     this.ea = b.readString(d, !1);
     FontTextCommand.call(this, a, b, c)
 };
-UnknownCmd71.prototype = Object.create(FontTextCommand.prototype);
-UnknownCmd71.prototype.constructor = UnknownCmd71;
-var UnknownCmd72;
-UnknownCmd72 = function(a, b, c) {
+DrawTextASCII.prototype = Object.create(FontTextCommand.prototype);
+DrawTextASCII.prototype.constructor = DrawTextASCII;
+var DrawTextUnicode;
+DrawTextUnicode = function(a, b, c) {
     var d = b.getUint16();
     this.ea = b.readString(d, !0);
     FontTextCommand.call(this, a, b, c)
 };
-UnknownCmd72.prototype = Object.create(FontTextCommand.prototype);
-UnknownCmd72.prototype.constructor = UnknownCmd72;
+DrawTextUnicode.prototype = Object.create(FontTextCommand.prototype);
+DrawTextUnicode.prototype.constructor = DrawTextUnicode;
 var VisuSessionState;
 VisuSessionState = function() {
     this.pn = "";

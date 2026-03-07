@@ -52,92 +52,122 @@ const RENAMES = {
     // =================================================================
     // Paint command classes
     // =================================================================
+    // --- Drawing primitives ---
     V: 'NoOpPaintCommand',            // No-op / unhandled paint command
     Qb: 'DrawPrimitive',              // ID 1,45,60,61: rect, round-rect, ellipse, lines
     Pb: 'DrawPolygon',                // ID 2,59: filled/stroked polygon, polyline, bezier
     Tb: 'DrawText',                   // ID 3,11,46,47: text rendering variants
+    Lb: 'Fill3DRect',                 // ID 23: filled rect with optional 3D border
+    Nb: 'DrawArc',                    // ID 36: arc / pie segment
+    Ob: 'DrawPixels',                 // ID 44: point list
+    Rb: 'ShapeRenderer',              // Renders ellipses/rectangles via bezier curves
+    Sb: 'DrawShapeAtPen',             // ID 31: draw shape at pen position, advance pen
+    Ha: 'DrawTooltip',                // ID 14,15: tooltip with styled box and anchor
+
+    // --- Graphics state commands ---
     fc: 'SetFillColor',               // ID 4: fill color + fill-enable flag
     gc: 'SetPenStyle',                // ID 5: outline style, color, width
     hc: 'SetFont',                    // ID 6: text color, style, size, family
+    jc: 'SetDrawMode',                // ID 18: drawing mode / layer switch
+    nc: 'AreaGradientStyle',          // ID 30,48: area/gradient style / Set3DStyle
+    Gc: 'SetCornerRadius',            // ID 73: corner radius for rounded rects
+    Dc: 'SetRenderParameter',         // ID 66: numeric key-value pair
+    hd: 'SetCompositeMode',           // ID 106: canvas composite/blending
+    mc: 'SetCursorStyle',             // ID 24: set mouse cursor CSS style
+
+    // --- Clipping and clearing ---
     Ga: 'ClearRect',                  // ID 7: fill rect with current fill color
     Jb: 'SetClipRect',                // ID 8: push clipping rectangle
     ic: 'RestoreClipRect',            // ID 9: pop clipping rectangle
-    ec: 'FillRelatedState',           // ID 10,25: fill-related state
-    Ha: 'RectDrawVariant',            // ID 14,15: rect draw variant
-    Kb: 'UnknownCmd16',               // ID 16
-    Vb: 'UnknownCmd17',               // ID 17
-    jc: 'SetDrawMode',                // ID 18: drawing mode / layer switch
+    Ib: 'ClearRectAndClip',           // ID 93: combined clear + clip
+    Hb: 'ClearFullContext',           // ID 105: clear entire canvas
+
+    // --- Text input and measurement ---
+    ec: 'CreateEditControl',          // ID 10,25: create styled text input field
+    Ub: 'SetEditControlState',        // ID 12: close/reset text edit control
+    oc: 'ClearTextMeasureCache',      // ID 32: clear cached text width measurements
+    pc: 'MeasureTextMetrics',         // ID 33,34: measure text widths for line breaking
+    qc: 'SendTextMetricsEvent',       // ID 35: send measured text metrics to PLC (event 518)
+
+    // --- Text break cache (line wrapping) ---
+    vc: 'ClearTextBreakCache',        // ID 50: clear text break position cache
+    wc: 'PopulateTextBreakCache',     // ID 51,52: calculate text break positions
+    xc: 'SendTextBreakData',          // ID 53: send text break data to PLC (event 519)
+
+    // --- Image rendering ---
     Aa: 'DrawImage',                  // ID 19: bitmap/vector from image pool
-    kc: 'UnknownCmd20',               // ID 20
-    lc: 'UnknownCmd21_22',            // ID 21,22
-    Lb: 'Fill3DRect',                 // ID 23: filled rect with optional 3D border
-    mc: 'UnknownCmd24',               // ID 24
-    nc: 'AreaGradientStyle',          // ID 30,48: area/gradient style / Set3DStyle
-    Sb: 'UnknownCmd31',               // ID 31
-    oc: 'UnknownCmd32',               // ID 32
-    pc: 'UnknownCmd33_34',            // ID 33,34
-    qc: 'UnknownCmd35',               // ID 35
-    Nb: 'DrawArc',                    // ID 36: arc / pie segment
+    Zc: 'DrawDomImage',               // ID 94: DOM image for dialog/layer
+
+    // --- Initialization and visualization ---
     rc: 'InitVisualization',          // ID 37: switch to named visu screen
-    Ba: 'UnknownCmd41',               // ID 41
+    Kb: 'CloseTooltip',              // ID 16: remove tooltip DOM element
+    Vb: 'ExecuteSystemAction',        // ID 17: navigate URL, print, or start process
+    kc: 'ExecuteClientProgram',       // ID 20: unsupported in web (logs warning)
+    lc: 'OpenFileDialog',             // ID 21,22: unsupported in web (logs warning)
+    Ba: 'InvalidateDisplay',          // ID 41: force redraw via gesture handler
+
+    // --- Namespace and touch handling ---
+    uc: 'RegisterNamespaces',         // ID 49: register namespace entries with resolver
     sc: 'TouchHandlingFlags',         // ID 42: global touch/render flags
     tc: 'TouchRectangles',            // ID 43: hit-test rectangles
-    Ob: 'DrawPixels',                 // ID 44: point list
-    Ub: 'UnknownCmd12',               // ID 12
-    uc: 'UnknownCmd49',               // ID 49
-    vc: 'UnknownCmd50',               // ID 50
-    wc: 'UnknownCmd51_52',            // ID 51,52
-    xc: 'UnknownCmd53',               // ID 53
-    yc: 'UnknownCmd54',               // ID 54
-    zc: 'UnknownCmd55',               // ID 55
-    Ac: 'UnknownCmd56',               // ID 56
-    Bc: 'UnknownCmd57',               // ID 57
-    Cc: 'UnknownCmd58',               // ID 58
-    Dc: 'SetRenderParameter',         // ID 66: numeric key-value pair
-    // $b: 'UnknownCmd67',            // $ in identifier — handled by jscodeshift
-    Wb: 'UnknownCmd68',               // ID 68
-    Zb: 'UnknownCmd69',               // ID 69
-    Ec: 'UnknownCmd71',               // ID 71
-    Fc: 'UnknownCmd72',               // ID 72
-    Gc: 'SetCornerRadius',            // ID 73: corner radius / update element
-    Hc: 'UnknownCmd74',               // ID 74
-    Ic: 'UnknownCmd75',               // ID 75
-    Jc: 'UnknownCmd76',               // ID 76
-    Kc: 'UnknownCmd77',               // ID 77
-    Lc: 'UnknownCmd78',               // ID 78
-    Mc: 'UnknownCmd79',               // ID 79
-    Nc: 'UnknownCmd80',               // ID 80
-    Oc: 'UnknownCmd81',               // ID 81
-    Pc: 'UnknownCmd82',               // ID 82
-    Qc: 'UnknownCmd83',               // ID 83
-    Rc: 'UnknownCmd85',               // ID 85
-    Sc: 'UnknownCmd86',               // ID 86
-    Tc: 'UnknownCmd87',               // ID 87
-    Uc: 'UnknownCmd88',               // ID 88
-    Vc: 'UnknownCmd89',               // ID 89
-    Wc: 'UnknownCmd90',               // ID 90
-    Xc: 'UnknownCmd91',               // ID 91
-    Yc: 'UnknownCmd92',               // ID 92
-    Ib: 'ClearRectAndClip',           // ID 93: combined clear + clip
-    Zc: 'DrawDomImage',               // ID 94: DOM image for dialog/layer
-    Hb: 'ClearFullContext',            // ID 105: clear entire canvas
-    hd: 'SetCompositeMode',           // ID 106: canvas composite/blending
-    Ea: 'ExtendedCmd8192',             // ID 8192
-    Fa: 'ExtendedCmd8193',             // ID 8193
-    Da: 'ExtendedCmd8194',             // ID 8194
-    ac: 'ExtensionMethodCall',         // ID 27: call method on native extension
+
+    // --- Double-buffer / offscreen rendering ---
+    yc: 'AllocateDoubleBuffer',       // ID 54: create offscreen rendering surface
+    zc: 'FreeDoubleBuffer',           // ID 55: deallocate offscreen buffer
+    Ac: 'InvalidateBuffer',           // ID 56: mark buffer as needing re-render
+    Bc: 'CommitDoubleBuffer',         // ID 57: finalize offscreen rendering
+    Cc: 'SetGlyphMetrics',            // ID 58: store glyph metrics for text element
+
+    // --- Native controls and extensions ---
     bc: 'NativeControlCreate',         // ID 26: create native control element
+    ac: 'ExtensionMethodCall',         // ID 27: call method on native extension
     cc: 'NativeControlResize',         // ID 28: resize native control
-    dc: 'NativeControlFlags',          // ID 29: set native control visibility/flags
-    ad: 'UnknownCmd98',                // ID 98
-    bd: 'UnknownCmd99',                // ID 99
-    cd: 'UnknownCmd101',               // ID 101
-    dd: 'UnknownCmd100',               // ID 100
-    ed: 'UnknownCmd102',               // ID 102
-    fd: 'UnknownCmd103',               // ID 103
-    gd: 'UnknownCmd104',              // ID 104
+    dc: 'NativeControlFlags',          // ID 29: set native control flags/destroy
+
+    // --- File transfer ---
+    Wb: 'FileTransferInitiate',        // ID 68: initiate file transfer stream
+    Zb: 'FileTransferDataChunk',       // ID 69: file transfer data chunk
+
+    // --- Font text rendering ---
     md: 'FontTextCommand',             // Base for text commands with font/glyph data
-    Rb: 'ShapeRenderer',              // Renders ellipses/rectangles via bezier curves
+    Ec: 'DrawTextASCII',              // ID 71: text render (ASCII encoding)
+    Fc: 'DrawTextUnicode',            // ID 72: text render (Unicode encoding)
+
+    // --- UI element lifecycle (layered composition system) ---
+    Hc: 'CreateUIElement',             // ID 74: create and register UI element
+    Ic: 'UpdateContainerLayout',       // ID 75: update element position/size with animation
+    Jc: 'RemoveUIElement',             // ID 76: remove/hide UI element by ID
+    Kc: 'ResetContainer',             // ID 77: reset/clear UI container
+    Lc: 'ClearAndComposite',          // ID 78: flush rendering and clear canvas
+    Mc: 'CreateMenuItem',             // ID 79: create/register menu option
+    Nc: 'ConfigureDrawingContext',    // ID 80: configure advanced canvas parameters
+    Oc: 'SelectLayer',                // ID 81: activate/select rendering layer
+    Pc: 'ResetLayerStack',            // ID 82: reset/clear layer stack
+    Qc: 'SetTransformMatrix',         // ID 83: set 6-parameter transform/clip matrix
+
+    // --- UI styling and dialogs ---
+    Rc: 'SetStrokeStyle',             // ID 85: set line width, dash style, and color
+    Sc: 'CreateDynamicControl',        // ID 86: instantiate UI control by class name
+    Tc: 'SetElementProperties',        // ID 87: set typed properties on named element
+    Uc: 'OpenModalDialog',            // ID 88: open modal dialog with configuration
+    Vc: 'SwitchMainView',             // ID 89: navigate to different page/view
+    Wc: 'AnimateWithOpacity',          // ID 90: animate container with opacity transition
+    Xc: 'CloseDialog',                // ID 91: close/dismiss modal dialog
+    Yc: 'RefreshVisualization',        // ID 92: trigger full repaint
+
+    // --- Logging and state ---
+    ad: 'LogEvent',                    // ID 98: log diagnostic message to console
+    bd: 'ClearModalState',             // ID 99: clear current modal dialog state
+    cd: 'HideMultipleElements',        // ID 100: hide/remove multiple elements by ID array
+    dd: 'DeleteMultipleElements',      // ID 101: delete/finalize multiple elements by ID array
+    ed: 'DeactivateLayer',             // ID 102: deactivate layer/context
+    fd: 'SetLayerPosition',            // ID 103: set layer position via float32 coords
+    gd: 'AnimateElementTransform',     // ID 104: animate element with float transform + easing
+
+    // --- Extended session commands ---
+    Ea: 'NavigateSession',             // ID 8192: navigate/activate session resource
+    Fa: 'ExecuteSessionScript',        // ID 8193: execute script in visualization session
+    Da: 'SetSessionTimeout',           // ID 8194: configure session render timeout
 
     // =================================================================
     // State machine classes (connection startup sequence)

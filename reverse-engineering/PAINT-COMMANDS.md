@@ -1,6 +1,6 @@
 # CoDeSys WebVisu Paint Commands Reference
 
-Reverse-engineered from the `webvisu.js` canvas renderer (command factory `Ja.mz(...)`) and reimplemented in `src/protocol/paint-commands.ts` and `src/protocol/debug-renderer.ts`.
+Reverse-engineered from the CoDeSys WebVisu canvas renderer. See `webvisu-deobfuscated.js` for the reference implementation (all 107 command classes fully identified). Our adapter implements a subset in `src/protocol/paint-commands.ts` and `src/protocol/debug-renderer.ts`.
 
 ## Paint Command Stream Format
 
@@ -46,123 +46,159 @@ The correct default background is **white** (`#ffffff`).
 
 ---
 
-## Full Command ID → JS Class Map
+## Full Command ID → Class Map
 
-From `webvisu.js` command factory `Ja.mz(...)`. Class names are obfuscated; see the command catalog below for decoded behavior.
+From the command factory `PaintCommandFactory.createCommand(...)`. All class names have been identified through reverse engineering.
 
 ```text
-ID    Class    Description
-──    ─────    ───────────
-0     V        No-op / unhandled
-1     Qb       DrawPrimitive (quad point variant)
-2     Pb       DrawPolygon (int16 points)
-3     Tb       DrawText (4-point rect variant)
-4     fc       SetFillColor
-5     gc       SetPenStyle
-6     hc       SetFont
-7     Ga       ClearRect
-8     Jb       SetClipRect (push)
-9     ic       RestoreClipRect (pop)
-10    ec       (fill-related state)
-11    Tb       DrawText variant
-12    Ub       (unknown)
-13    V        No-op
-14    Ha       (rect draw variant)
-15    Ha       (rect draw variant)
-16    Kb       (unknown)
-17    Vb       (unknown)
-18    jc       SetDrawMode / layer switch
-19    Aa       DrawImage
-20    kc       (unknown)
-21    lc       (unknown)
-22    lc       (unknown)
-23    Lb       Fill3DRect
-24    mc       (unknown)
-25    ec       (fill-related state)
-26    bc       (unknown)
-27    ac       (unknown)
-28    cc       (unknown)
-29    dc       (unknown)
-30    nc       AreaGradientStyle
-31    Sb       (unknown)
-32    oc       (unknown)
-33    pc       (unknown)
-34    pc       (unknown)
-35    qc       (unknown)
-36    Nb       DrawArc / DrawPie
-37    rc       InitVisualization
-38    V        No-op
-39    V        No-op
-40    V        No-op
-41    Ba       (unknown)
-42    sc       TouchHandlingFlags
-43    tc       TouchRectangles
-44    Ob       DrawPixels (point list)
-45    Qb       DrawPrimitive (two-point rect)
-46    Tb       DrawText (latin1)
-47    Tb       DrawText (utf16le variant)
-48    nc       AreaGradientStyle variant / Set3DStyle
-49    uc       (unknown)
-50    vc       (unknown)
-51    wc       (unknown)
-52    wc       (unknown)
-53    xc       (unknown)
-54    yc       (unknown)
-55    zc       (unknown)
-56    Ac       (unknown)
-57    Bc       (unknown)
-58    Cc       (unknown)
-59    Pb       DrawPolygon (float points)
-60    Qb       DrawPrimitive (float quad)
-61    Qb       DrawPrimitive (float two-point rect)
-62    V        No-op
-63    V        No-op
-64    V        No-op
-65    V        No-op
-66    Dc       SetRenderParameter
-67    $b       (unknown)
-68    Wb       (unknown)
-69    Zb       (unknown)
-70    V        No-op
-71    Ec       (unknown)
-72    Fc       (unknown)
-73    Gc       SetCornerRadius / UpdateElement
-74    Hc       (unknown)
-75    Ic       (unknown)
-76    Jc       (unknown)
-77    Kc       (unknown)
-78    Lc       (unknown)
-79    Mc       (unknown)
-80    Nc       (unknown)
-81    Oc       (unknown)
-82    Pc       (unknown)
-83    Qc       (unknown)
-84    V        No-op
-85    Rc       (unknown)
-86    Sc       (unknown)
-87    Tc       (unknown)
-88    Uc       (unknown)
-89    Vc       (unknown)
-90    Wc       (unknown)
-91    Xc       (unknown)
-92    Yc       (unknown)
-93    Ib       ClearRectAndClip
-94    Zc       DrawDomImage (dialog/layer integration)
-95    V        No-op
-96    $c       (unknown)
-97    V        No-op
-98    ad       (unknown)
-99    bd       (unknown)
-100   cd       (unknown)
-101   dd       (unknown)
-102   ed       (unknown)
-103   fd       (unknown)
-104   gd       (unknown)
-105   Hb       ClearFullContext
-106   hd       SetCompositeMode
-8192  Ea       (extended command)
-8193  Fa       (extended command)
-8194  Da       (extended command)
+ID    Class                    Description
+──    ─────                    ───────────
+
+      ── Drawing Primitives ──
+0     NoOpPaintCommand         No-op / unhandled
+1     DrawPrimitive            Quad-point rect/ellipse/line
+2     DrawPolygon              Filled/stroked polygon (int16 points)
+3     DrawText                 Text with 4-point bounding rect
+23    Fill3DRect               Filled rect with optional 3D border
+36    DrawArc                  Arc / pie segment
+44    DrawPixels               Individual pixel points
+45    DrawPrimitive            Two-point rect variant
+59    DrawPolygon              Float-point polygon variant
+60    DrawPrimitive            Float quad-point variant
+61    DrawPrimitive            Float two-point variant
+
+      ── Graphics State ──
+4     SetFillColor             Fill color + fill-enable flag
+5     SetPenStyle              Outline style, color, width
+6     SetFont                  Text color, style, size, family
+18    SetDrawMode              Drawing mode / layer switch
+24    SetCursorStyle           Set mouse cursor CSS style
+30    AreaGradientStyle        Gradient/fill style
+48    AreaGradientStyle        3D style variant (border + fill colors)
+66    SetRenderParameter       Numeric key-value render parameter
+73    SetCornerRadius          Corner radius for rounded rects
+85    SetStrokeStyle           Line width, dash pattern, and color
+106   SetCompositeMode         Canvas composite/blending mode
+
+      ── Text Rendering ──
+11    DrawText                 DrawText variant
+46    DrawText                 Latin-1 text with bounding rect
+47    DrawText                 UTF-16LE text with bounding rect
+71    DrawTextASCII            ASCII text with font metrics
+72    DrawTextUnicode          Unicode text with font metrics
+
+      ── Clipping and Clearing ──
+7     ClearRect                Fill rect with current fill color
+8     SetClipRect              Push clipping rectangle
+9     RestoreClipRect          Pop clipping rectangle
+93    ClearRectAndClip         Combined clear + clip
+105   ClearFullContext          Clear entire canvas
+
+      ── Text Input Controls ──
+10    CreateEditControl        Create styled text input (Latin-1)
+12    SetEditControlState      Close/reset text edit control
+25    CreateEditControl        Create styled text input (Unicode)
+
+      ── Text Measurement (PLC ↔ browser) ──
+32    ClearTextMeasureCache    Clear text width measurement cache
+33    MeasureTextMetrics       Measure text widths (Latin-1)
+34    MeasureTextMetrics       Measure text widths (Unicode)
+35    SendTextMetricsEvent     Send measured widths to PLC (event 518)
+50    ClearTextBreakCache      Clear text break position cache
+51    PopulateTextBreakCache   Calculate text break positions (Latin-1)
+52    PopulateTextBreakCache   Calculate text break positions (Unicode)
+53    SendTextBreakData        Send break positions to PLC (event 519)
+
+      ── Image Rendering ──
+19    DrawImage                Bitmap/vector from image pool
+94    DrawDomImage             DOM image for dialog/layer
+
+      ── Double-Buffer / Offscreen Rendering ──
+54    AllocateDoubleBuffer     Create offscreen rendering surface
+55    FreeDoubleBuffer         Deallocate offscreen buffer
+56    InvalidateBuffer         Mark buffer as needing re-render
+57    CommitDoubleBuffer       Finalize offscreen rendering
+58    SetGlyphMetrics          Store glyph metrics for text element
+
+      ── UI Element Lifecycle ──
+74    CreateUIElement          Create and register UI element
+75    UpdateContainerLayout    Update position/size with animation
+76    RemoveUIElement          Remove/hide element by ID
+77    ResetContainer           Reset/clear UI container
+78    ClearAndComposite        Flush rendering and clear canvas
+100   HideMultipleElements     Hide/remove multiple elements by ID
+101   DeleteMultipleElements   Delete/finalize multiple elements by ID
+92    RefreshVisualization     Trigger full repaint
+
+      ── Layer Management ──
+81    SelectLayer              Activate/select rendering layer
+82    ResetLayerStack          Reset/clear layer stack
+83    SetTransformMatrix       Set 6-parameter transform matrix
+96    SetLayerVisibility       Control layer visibility state
+102   DeactivateLayer          Deactivate layer/context
+103   SetLayerPosition         Set layer position (float32 coords)
+
+      ── Dialog and View Navigation ──
+88    OpenModalDialog          Open modal dialog with config
+89    SwitchMainView           Navigate to different page/view
+90    AnimateWithOpacity       Animate container with opacity
+91    CloseDialog              Close/dismiss modal dialog
+99    ClearModalState          Clear current modal state
+
+      ── Dynamic Controls and Menus ──
+79    CreateMenuItem           Create/register menu option
+80    ConfigureDrawingContext  Configure advanced canvas parameters
+86    CreateDynamicControl     Instantiate UI control by class name
+87    SetElementProperties     Set typed properties on named element
+104   AnimateElementTransform  Animate with float transform + easing
+
+      ── Tooltip ──
+14    DrawTooltip              Tooltip (Latin-1 text, styled box)
+15    DrawTooltip              Tooltip (UTF-16 text)
+16    CloseTooltip             Remove tooltip DOM element
+
+      ── System Actions ──
+17    ExecuteSystemAction      Navigate URL, print, or start process
+20    ExecuteClientProgram     Unsupported in web (logs warning)
+21    OpenFileDialog           Unsupported in web (logs warning)
+22    OpenFileDialog           Unsupported in web (logs warning)
+41    InvalidateDisplay        Force redraw via gesture handler
+98    LogEvent                 Log diagnostic message to console
+
+      ── Native Controls / Extensions ──
+26    NativeControlCreate      Create native control element
+27    ExtensionMethodCall      Call method on native extension
+28    NativeControlResize      Resize native control
+29    NativeControlFlags       Set control flags or destroy
+
+      ── File Transfer ──
+67    FileTransferCommand      Initiate file transfer
+68    FileTransferInitiate     File transfer stream metadata
+69    FileTransferDataChunk    File transfer data chunk
+
+      ── Namespace and Touch ──
+37    InitVisualization        Switch to named visu screen
+42    TouchHandlingFlags       Global touch/render flags
+43    TouchRectangles          Hit-test rectangles
+49    RegisterNamespaces       Register namespace entries
+
+      ── Glyph Data ──
+31    DrawShapeAtPen           Draw shape at pen, advance position
+
+      ── Extended Session Commands ──
+8192  NavigateSession          Navigate/activate session resource
+8193  ExecuteSessionScript     Execute script in visu session
+8194  SetSessionTimeout        Configure session render timeout
+
+      ── No-ops (reserved/unused slots) ──
+0     NoOpPaintCommand
+13    NoOpPaintCommand
+38-40 NoOpPaintCommand
+62-65 NoOpPaintCommand
+70    NoOpPaintCommand
+84    NoOpPaintCommand
+95    NoOpPaintCommand
+97    NoOpPaintCommand
 ```
 
 ---
@@ -600,9 +636,9 @@ Offset  Size  Field
 - Controls rendering behavior (font reduction, timeouts, etc.)
 - Stored in a key-value map for the rendering session
 
-### ID 73 — UpdateElement / SetCornerRadius `Gc`
+### ID 73 — SetCornerRadius
 
-Marks a UI element as requiring a redraw, and/or sets the corner radius for rounded rectangles.
+Sets the corner radius for rounded rectangles.
 
 ```
 Offset  Size  Field
@@ -666,19 +702,545 @@ Offset  Size  Field
 
 ---
 
+## Newly Identified Commands
+
+### ID 10, 25 — CreateEditControl
+
+Creates a styled HTML text input field for user editing. ID 10 uses Latin-1 encoding, ID 25 uses Unicode.
+
+```
+Offset  Size  Field
+0       8     bounds       — bounding rectangle (4× int16)
+...     2     fontFlags    — italic (bit), bold (bit)
+...     2     fontSize     (uint16) — font size in pixels
+...     N     fontFamily   — font family name string
+...     2     alignment    (uint16) — bit 0=center, bit 1=right, bit 2=vtop, bit 3=vbottom
+...     N     text         — initial text content
+```
+
+- For ID 25: additional password flag and Unicode encoding flag
+- Registers the input element with the `EditControlManager`
+
+### ID 12 — SetEditControlState
+
+Closes or resets the active text edit control.
+
+```
+Offset  Size  Field
+0       2     action      (uint16) — 0 or 2 = close + reset; other = reset only
+```
+
+### ID 14, 15 — DrawTooltip
+
+Renders a tooltip with styled background box and text. ID 14 uses Latin-1, ID 15 uses UTF-16.
+
+```
+Offset  Size  Field
+0       2     textLen     (uint16)
+2       N     text        — tooltip text content
+...     4     anchorPoint — (x: int16, y: int16) anchor position
+...     2     style       (uint16) — 1 = popup-style tooltip
+```
+
+- Desktop: draws yellow (#ffffe1) background with black border and text
+- Mobile: uses native tooltip manager
+- Supports multi-line text wrapping
+
+### ID 16 — CloseTooltip
+
+Removes the tooltip DOM element. No data payload.
+
+### ID 17 — ExecuteSystemAction
+
+Performs a system action: URL navigation, printing, or process start.
+
+```
+Offset  Size  Field
+0       2     actionCode  (uint16) — 0=process, 1-3=print, 4=navigate
+2       2     urlLen      (uint16)
+4       N     url         — URL or path string
+...     2     targetLen   (uint16) — optional
+...     M     target      — "replace" for same-window navigation
+```
+
+- Action 0: logs "start process not possible in web"
+- Actions 1-3: logs "printing not possible in web"
+- Action 4: `window.open(url)` or `window.location.href = url` if target is "replace"
+
+### ID 20 — ExecuteClientProgram
+
+Logs warning "ExecuteClientProgram is not possible in the webvisualization." No data payload.
+
+### ID 21, 22 — OpenFileDialog
+
+Logs warning "OpenFileDialog is not possible in the webvisualization." No data payload.
+
+### ID 24 — SetCursorStyle
+
+Sets the mouse cursor CSS style on the canvas element.
+
+```
+Offset  Size  Field
+0       2     cursorType  (uint16) — cursor code:
+                            0, 2 = "pointer"
+                            1 = "default"
+                            3 = "wait"
+                            4 = "text"
+                            5 = "crosshair"
+                            6 = "help"
+                            7 = "col-resize"
+                            8 = "row-resize"
+                            9 = "nw-resize"
+                            10 = "ne-resize"
+                            11 = "w-resize"
+                            12 = "s-resize"
+                            13 = "pointer"
+```
+
+### ID 31 — DrawShapeAtPen
+
+Draws a shape (via `ShapeRenderer`) at the current pen position, then optionally advances the pen.
+
+```
+Offset  Size  Field
+0       2     shapeType   (uint16) — shape type code for ShapeRenderer
+2       4     cellSize    — (width: uint16, height: uint16) shape dimensions
+6       4     advance     — (dx: uint16, dy: uint16) pen advance after draw
+10      4     flags       (uint32) — bit 0=advance X, bit 1=advance Y, bit 2=use reference rect
+```
+
+- Used for table cell rendering with automatic pen advancement
+
+### ID 32 — ClearTextMeasureCache
+
+Clears the cached text width measurements used for text layout.
+
+```
+Offset  Size  Field
+0       4     unused1     (uint32)
+4       4     unused2     (uint32)
+```
+
+### ID 33, 34 — MeasureTextMetrics
+
+Measures text widths for each substring (1 char to full length) and caches the results. Used by the PLC for text line-breaking calculations. ID 33 uses Latin-1, ID 34 uses Unicode.
+
+```
+Offset  Size  Field
+0       2     textLen     (uint16)
+2       N     text        — text to measure
+```
+
+### ID 35 — SendTextMetricsEvent
+
+Serializes cached text width/height measurements into a binary payload and sends them to the PLC as event tag 518. No data payload.
+
+### ID 41 — InvalidateDisplay
+
+Forces a UI redraw by invoking the gesture event handler. No data payload.
+
+### ID 49 — RegisterNamespaces
+
+Registers namespace entries with the namespace resolver for qualified name resolution.
+
+```
+(variable-length payload — namespace string table and index arrays)
+```
+
+### ID 50 — ClearTextBreakCache
+
+Clears the text break position cache. Same layout as ClearTextMeasureCache (two unused uint32).
+
+### ID 51, 52 — PopulateTextBreakCache
+
+Calculates text break positions (character boundaries for line wrapping). ID 51 uses Latin-1, ID 52 uses Unicode.
+
+```
+Offset  Size  Field
+0       2     textLen     (uint16)
+2       N     text        — text to analyze for break positions
+```
+
+### ID 53 — SendTextBreakData
+
+Serializes cached text break positions into a binary payload and sends them to the PLC as event tag 519. No data payload.
+
+### ID 54 — AllocateDoubleBuffer
+
+Creates a double-buffered offscreen rendering surface and stores it in the command cache.
+
+```
+Offset  Size  Field
+0       2     cacheId     (uint16) — ID for storing in command cache
+2       2     width       (uint16) — buffer width in pixels
+4       2     height      (uint16) — buffer height in pixels
+6       4     flags       (uint32) — creation flags
+```
+
+- Creates white-filled canvas(es) as offscreen rendering targets
+- Part of the layered graphics composition system
+
+### ID 55 — FreeDoubleBuffer
+
+Deallocates an offscreen buffer and removes associated gesture targets.
+
+```
+Offset  Size  Field
+0       2     cacheId     (uint16) — buffer to free
+```
+
+### ID 56 — InvalidateBuffer
+
+Marks a cached rendering buffer as dirty, requiring re-render on next access.
+
+```
+Offset  Size  Field
+0       2     cacheId     (uint16) — buffer to invalidate
+```
+
+### ID 57 — CommitDoubleBuffer
+
+Finalizes offscreen rendering: optionally copies visible context to offscreen, marks buffer clean.
+
+```
+Offset  Size  Field
+0       2     cacheId     (uint16) — buffer to commit
+```
+
+### ID 58 — SetGlyphMetrics
+
+Stores glyph rendering metrics (height, style, offset) for a specific glyph index on an interactive element.
+
+```
+Offset  Size  Field
+0       4     elementId   (uint32) — target interactive element
+2       2     glyphIndex  (uint16)
+4       2     height      (uint16)
+6       1     italic      (boolean)
+7       1     bold        (boolean)
+8       4     offset      — (x: uint16, y: uint16) glyph offset
+```
+
+### ID 68 — FileTransferInitiate
+
+Initiates a file transfer stream with protocol metadata.
+
+```
+Offset  Size  Field
+0       1     version     (uint8) — protocol version (normalized to 2 or 3)
+1       N     packet      — ProtocolDataPacket with transfer metadata
+```
+
+### ID 69 — FileTransferDataChunk
+
+Delivers a chunk of file transfer data.
+
+```
+Offset  Size  Field
+0       4     flags       (uint32) — bit 0 signals completion
+4       2     nameLen     (uint16)
+6       N     filename    — transfer filename
+...     4     dataLen     (uint32)
+...     M     data        — raw file bytes
+```
+
+### ID 71, 72 — DrawTextASCII / DrawTextUnicode
+
+Text rendering with font metrics (extends FontTextCommand base). ID 71 uses ASCII, ID 72 uses Unicode.
+
+```
+Offset  Size  Field
+0       4     colorFlags  (uint32) — from FontTextCommand base
+4       2     position    (int16) — text position parameter
+6       2     textLen     (uint16)
+8       N     text        — text content
+```
+
+### ID 74 — CreateUIElement
+
+Creates and registers a UI element (canvas, dialog, native control, etc.) with configuration flags.
+
+```
+Offset  Size  Field
+0       2     elementId   (int16) — unique element ID
+2       4     flags       (uint32) — 8 configuration bits controlling element type and behavior
+```
+
+### ID 75 — UpdateContainerLayout
+
+Updates element position, size, and transform with optional CSS animation.
+
+```
+Offset  Size  Field
+0       10    position    — left, top, width, height, offsetX (5× int16)
+10      4     moreParams  — offsetY, transformA, transformB, extraParam (int16 values)
+...     2     duration    (int16) — animation duration in milliseconds
+...     4     flags       (uint32) — bit 2 = deferred update
+```
+
+### ID 76 — RemoveUIElement
+
+Removes/hides a UI element by ID.
+
+```
+Offset  Size  Field
+0       2     elementId   (int16)
+```
+
+### ID 77 — ResetContainer
+
+Resets/clears the current UI container. Parses an int16 ID (unused in execution).
+
+### ID 78 — ClearAndComposite
+
+Flushes previous rendering, clears the entire canvas (save/clearRect/restore), and updates dirty regions. No data payload.
+
+### ID 79 — CreateMenuItem
+
+Creates and registers a menu option.
+
+```
+Offset  Size  Field
+0       2     menuId      (int16) — 32767 = system/special item
+2       4     flags       (uint32) — optional configuration (only if size ≥ 3)
+```
+
+### ID 80 — ConfigureDrawingContext
+
+Configures advanced canvas/drawing parameters with up to 11 values.
+
+```
+Offset  Size  Field
+0       8     bounds      — left, top, width, height (4× int16)
+8       2     flags       — boolean flags (2 bits)
+10      1     param       (uint8) — context parameter
+11      8     extraBounds — optional additional bounds (4× int16)
+```
+
+### ID 81 — SelectLayer
+
+Activates/selects a rendering layer by ID.
+
+```
+Offset  Size  Field
+0       2     layerId     (int16)
+```
+
+### ID 82 — ResetLayerStack
+
+Resets/clears the layer stack. Parses an int16 (unused in execution).
+
+### ID 83 — SetTransformMatrix
+
+Sets a 6-parameter affine transform/clip matrix.
+
+```
+Offset  Size  Field
+0       24    matrix      — 6× int32 values (transform coefficients)
+```
+
+### ID 85 — SetStrokeStyle
+
+Sets line width, dash style, and stroke color.
+
+```
+Offset  Size  Field
+0       2     lineWidth   (int16) — stroke width
+2       2     dashType    (int16) — 0,5=solid, 1=dashed, 2-4=dotted
+4       4     colorArgb   (uint32) — stroke color in ARGB
+```
+
+### ID 86 — CreateDynamicControl
+
+Instantiates a UI control by class name string.
+
+```
+Offset  Size  Field
+0       2     nameLen     (uint16)
+2       N     className   — control class/type name
+```
+
+### ID 87 — SetElementProperties
+
+Sets typed properties on a named element.
+
+```
+Offset  Size  Field
+0       2     nameLen     (uint16)
+2       N     elementName — target element name
+...     M     properties  — array of typed property values (type code + binary data)
+```
+
+- Supported types: BOOL, BYTE, WORD, DWORD, FLOAT, DOUBLE, STRING
+
+### ID 88 — OpenModalDialog
+
+Opens a modal dialog with extensive configuration.
+
+```
+Offset  Size  Field
+0       2     dialogId    (int16)
+2       2     layerIndex  (int16) — layer/visibility index
+4       4     flags       (uint32) — multiple boolean/flag fields
+...     N     subFlags    — additional dialog options (8+ sub-flags)
+```
+
+### ID 89 — SwitchMainView
+
+Navigates to a different page/view.
+
+```
+Offset  Size  Field
+0       2     viewId      (int16)
+2       2     layerIndex  (int16) — layer/visibility index
+```
+
+### ID 90 — AnimateWithOpacity
+
+Animates a container with both transform and opacity transition.
+
+```
+Offset  Size  Field
+0       8     bounds      — left, top, width, height (4× int16)
+8       2     duration    (int16) — animation duration in ms
+10      4     colorArgb   (uint32) — RGBA opacity/color value
+```
+
+### ID 91 — CloseDialog
+
+Closes/dismisses a modal dialog.
+
+```
+Offset  Size  Field
+0       2     dialogId    (int16)
+```
+
+### ID 92 — RefreshVisualization
+
+Triggers a full repaint of the visualization. Parses an int16 (unused in execution).
+
+### ID 96 — SetLayerVisibility
+
+Controls the visibility state of a layer.
+
+```
+Offset  Size  Field
+0       1     visibility  (uint8) — visibility flag/level
+```
+
+### ID 98 — LogEvent
+
+Logs a diagnostic message to the browser console at the appropriate log level.
+
+```
+Offset  Size  Field
+0       2     level       (uint16) — 0=no-op, 1=info, 2=warn, 4,8=error, 16=debug
+2       2     messageId   (uint16)
+4       2     textLen     (uint16)
+6       N     text        — message description
+```
+
+### ID 99 — ClearModalState
+
+Clears/closes the current modal dialog state (only when ID = 32767).
+
+```
+Offset  Size  Field
+0       2     modalId     (int16) — 32767 triggers clear
+```
+
+### ID 100 — HideMultipleElements
+
+Hides/removes multiple UI elements by ID array.
+
+```
+Offset  Size  Field
+0       N     elementIds  — array of int16 element IDs
+```
+
+### ID 101 — DeleteMultipleElements
+
+Deletes/finalizes multiple UI elements by ID array.
+
+```
+Offset  Size  Field
+0       N     elementIds  — array of int16 element IDs
+```
+
+### ID 102 — DeactivateLayer
+
+Deactivates a specific layer/context.
+
+```
+Offset  Size  Field
+0       2     layerId     (int16)
+```
+
+### ID 103 — SetLayerPosition
+
+Sets layer position using float32 coordinates.
+
+```
+Offset  Size  Field
+0       4     x           (float32) — X position
+4       4     y           (float32) — Y position
+```
+
+### ID 104 — AnimateElementTransform
+
+Animates element position/size/scale with configurable duration and float transform parameters.
+
+```
+Offset  Size  Field
+0       8     bounds      — left, top, width, height (4× int16)
+8       4     offsets     — offsetX, offsetY (2× int16)
+12      8     transform   — transformA, transformB (2× float32)
+20      2     extraParam  (int16)
+22      2     duration    (int16) — animation duration in ms
+24      4     flags       (uint32) — configuration bitmask
+```
+
+---
+
 ## Extended Commands (8192+)
 
-These command IDs appear in the factory but are rarely seen in normal visualization sessions:
+Extended session-level commands, rarely seen in normal visualization rendering:
 
-| ID | Class | Notes |
-|----|-------|-------|
-| 8192 | `Ea` | Extended command (purpose unknown) |
-| 8193 | `Fa` | Extended command (purpose unknown) |
-| 8194 | `Da` | Extended command (purpose unknown) |
+### ID 8192 — NavigateSession
+
+Navigates to or activates a session resource by name.
+
+```
+Offset  Size  Field
+0       2     nameLen     (uint16)
+2       N     name        — resource name string
+2+N     2     param       (uint16) — activation parameter
+```
+
+### ID 8193 — ExecuteSessionScript
+
+Executes a script or command string in the visualization session.
+
+```
+Offset  Size  Field
+0       2     scriptLen   (uint16)
+2       N     script      — script/command string
+```
+
+### ID 8194 — SetSessionTimeout
+
+Configures the session rendering timeout or refresh interval.
+
+```
+Offset  Size  Field
+0       4     timeout     (uint32) — timeout/interval value
+```
 
 ---
 
 ## Implementation Status Summary
+
+Commands implemented in `src/protocol/paint-commands.ts` and `src/protocol/debug-renderer.ts`:
 
 | ID | Name | Debug Renderer | Notes |
 |---:|------|:--------------:|-------|
@@ -691,12 +1253,25 @@ These command IDs appear in the factory but are rarely seen in normal visualizat
 | 7 | ClearRect | Yes | |
 | 8 | SetClipRect | Yes | |
 | 9 | RestoreClipRect | Yes | |
+| 10,25 | CreateEditControl | No | Text input field lifecycle |
+| 12 | SetEditControlState | No | Edit control close/reset |
+| 14,15 | DrawTooltip | No | Tooltip with styled box |
+| 16 | CloseTooltip | No | Tooltip removal |
+| 17 | ExecuteSystemAction | No | URL navigation / print |
 | 18 | SetDrawMode | Yes | Single canvas (no layers) |
 | 19 | DrawImage | Yes | With PLC image fetch + tint |
+| 20 | ExecuteClientProgram | No | Unsupported in web |
+| 21,22 | OpenFileDialog | No | Unsupported in web |
 | 23 | Fill3DRect | Yes | 3D style approximated |
+| 24 | SetCursorStyle | No | CSS cursor on canvas |
 | 30 | AreaGradientStyle | No | Not seen in captures |
+| 31 | DrawShapeAtPen | No | Shape at pen position |
+| 32 | ClearTextMeasureCache | No | Text layout helper |
+| 33,34 | MeasureTextMetrics | No | Text width measurement |
+| 35 | SendTextMetricsEvent | No | Sends event 518 to PLC |
 | 36 | DrawArc/Pie | No | Not implemented |
 | 37 | InitVisualization | Yes | |
+| 41 | InvalidateDisplay | No | Force redraw |
 | 42 | TouchHandlingFlags | Yes | No-op (metadata only) |
 | 43 | TouchRectangles | Yes | No-op (metadata only) |
 | 44 | DrawPixels | No | Not implemented |
@@ -704,15 +1279,58 @@ These command IDs appear in the factory but are rarely seen in normal visualizat
 | 46 | DrawText (latin1) | Yes | |
 | 47 | DrawText (utf16) | Yes | UTF-16LE decode fallback |
 | 48 | Set3DStyle | Yes | Gradient approximated |
+| 49 | RegisterNamespaces | No | Namespace resolver setup |
+| 50 | ClearTextBreakCache | No | Text break positions |
+| 51,52 | PopulateTextBreakCache | No | Text break calculation |
+| 53 | SendTextBreakData | No | Sends event 519 to PLC |
+| 54 | AllocateDoubleBuffer | No | Offscreen surface |
+| 55 | FreeDoubleBuffer | No | Deallocate buffer |
+| 56 | InvalidateBuffer | No | Mark buffer dirty |
+| 57 | CommitDoubleBuffer | No | Finalize rendering |
+| 58 | SetGlyphMetrics | No | Glyph info storage |
 | 59 | DrawPolygon (float) | Yes | |
 | 60 | DrawPrimitive (f.quad) | Yes | |
 | 61 | DrawPrimitive (f.2pt) | Yes | |
 | 66 | SetRenderParameter | Yes | Metadata cached |
-| 73 | UpdateElement/CornerRadius | Yes | |
+| 67 | FileTransferCommand | No | File transfer init |
+| 68 | FileTransferInitiate | No | Transfer metadata |
+| 69 | FileTransferDataChunk | No | Transfer data |
+| 71 | DrawTextASCII | No | Font-metric text render |
+| 72 | DrawTextUnicode | No | Font-metric text render |
+| 73 | SetCornerRadius | Yes | |
+| 74 | CreateUIElement | No | Element lifecycle |
+| 75 | UpdateContainerLayout | No | Animated layout |
+| 76 | RemoveUIElement | No | Element removal |
+| 77 | ResetContainer | No | Container reset |
+| 78 | ClearAndComposite | No | Flush + clear |
+| 79 | CreateMenuItem | No | Menu registration |
+| 80 | ConfigureDrawingContext | No | Canvas config |
+| 81 | SelectLayer | No | Layer activation |
+| 82 | ResetLayerStack | No | Layer reset |
+| 83 | SetTransformMatrix | No | Affine transform |
+| 85 | SetStrokeStyle | No | Line style/color |
+| 86 | CreateDynamicControl | No | Dynamic UI control |
+| 87 | SetElementProperties | No | Property update |
+| 88 | OpenModalDialog | No | Dialog creation |
+| 89 | SwitchMainView | No | Page navigation |
+| 90 | AnimateWithOpacity | No | Opacity animation |
+| 91 | CloseDialog | No | Dialog dismissal |
+| 92 | RefreshVisualization | No | Full repaint |
 | 93 | ClearRectAndClip | Yes | |
-| 94 | DrawDomImage | No | Dialog/layer integration |
+| 94 | DrawDomImage | No | Dialog/layer image |
+| 96 | SetLayerVisibility | No | Layer visibility |
+| 98 | LogEvent | No | Console logging |
+| 99 | ClearModalState | No | Modal cleanup |
+| 100 | HideMultipleElements | No | Batch hide |
+| 101 | DeleteMultipleElements | No | Batch delete |
+| 102 | DeactivateLayer | No | Layer deactivation |
+| 103 | SetLayerPosition | No | Float position |
+| 104 | AnimateElementTransform | No | Float animation |
 | 105 | ClearFullContext | Yes | |
 | 106 | SetCompositeMode | Partial | Always source-over |
+| 8192 | NavigateSession | No | Session navigation |
+| 8193 | ExecuteSessionScript | No | Script execution |
+| 8194 | SetSessionTimeout | No | Render timeout |
 
 ---
 
