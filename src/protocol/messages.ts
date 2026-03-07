@@ -687,7 +687,7 @@ export function parsePaintDataResponse(buf: ArrayBuffer): PaintDataResponse {
   }
 
   if (commandChunks.length === 1) {
-    commands = commandChunks[0];
+    commands = new Uint8Array(commandChunks[0]);
   } else if (commandChunks.length > 1) {
     const merged = new Uint8Array(commandBytesRead);
     let offset = 0;
