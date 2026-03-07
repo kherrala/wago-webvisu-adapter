@@ -290,10 +290,21 @@ function parseTextLabelCommand(cmd: PaintCommand): TextLabelCommand | null {
   const bottom = dv.getInt16(6, true);
   const flags = dv.getUint32(8, true);
   const textLen = dv.getUint16(12, true);
-  if (cmd.data.length < 14 + textLen) return null;
-  const textBytes = cmd.data.subarray(14, 14 + textLen);
-  const text = (cmd.id === CMD_DRAW_TEXT_UTF16 ? decodeUtf16Le(textBytes) : decodeLatin1(textBytes))
-    .replace(/\x00+$/g, '');
+  const textOffset = 14;
+  const available = cmd.data.length - textOffset;
+  if (available <= 0) return null;
+
+  let text = '';
+  if (cmd.id === CMD_DRAW_TEXT_UTF16) {
+    // WebVisu UTF-16 command stores character count, but some variants emit byte count.
+    const byteLength = textLen * 2 <= available ? textLen * 2 : Math.min(textLen, available);
+    if (byteLength <= 0) return null;
+    text = decodeUtf16Le(cmd.data.subarray(textOffset, textOffset + byteLength)).replace(/\x00+$/g, '');
+  } else {
+    if (textLen > available) return null;
+    text = decodeLatin1(cmd.data.subarray(textOffset, textOffset + textLen)).replace(/\x00+$/g, '');
+  }
+
   return {
     commandId: cmd.id,
     left,
