@@ -626,6 +626,9 @@ export function parsePaintDataResponse(buf: ArrayBuffer): PaintDataResponse {
   let commandCount = 0;
   let commands = new Uint8Array(0);
   let continuation = 0;
+  let expectedCommandBytes: number | null = null;
+  const commandChunks: Uint8Array[] = [];
+  let commandBytesRead = 0;
 
   // Find the paint data container (tag 132 or 129)
   const container = findTlvEntry(entries, 132) || findTlvEntry(entries, 129);
@@ -641,15 +644,41 @@ export function parsePaintDataResponse(buf: ArrayBuffer): PaintDataResponse {
         // Paint header: unused(4) + commandCount(4) + totalSize(4) + continuation(4)
         const hdr = new DataView(inner.data.buffer, inner.data.byteOffset, inner.data.byteLength);
         commandCount = hdr.getUint32(4, true);
+        expectedCommandBytes = hdr.getUint32(8, true);
         continuation = hdr.getUint32(12, true);
       } else if (inner.tag === 3) {
-        // Raw paint command data
-        commands = new Uint8Array(inner.data);
+        // Raw paint command data (can arrive in multiple tag-3 chunks).
+        let chunk = new Uint8Array(inner.data);
+        if (expectedCommandBytes !== null) {
+          const remaining = Math.max(0, expectedCommandBytes - commandBytesRead);
+          if (remaining === 0) {
+            continue;
+          }
+          if (chunk.length > remaining) {
+            chunk = chunk.subarray(0, remaining);
+          }
+        }
+        if (chunk.length > 0) {
+          commandChunks.push(new Uint8Array(chunk));
+          commandBytesRead += chunk.length;
+        }
       } else if (inner.tag === 4) {
         // Finish marker (0 continuation remaining)
         continuation = 0;
       }
     }
+  }
+
+  if (commandChunks.length === 1) {
+    commands = commandChunks[0];
+  } else if (commandChunks.length > 1) {
+    const merged = new Uint8Array(commandBytesRead);
+    let offset = 0;
+    for (const chunk of commandChunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    commands = merged;
   }
 
   return { error, commandCount, commands, continuation };
