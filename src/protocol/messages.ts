@@ -42,6 +42,22 @@ function buildServiceRequest(
   return out.buffer;
 }
 
+function parseExpectedServiceResponseFrame(
+  buf: ArrayBuffer,
+  requestServiceGroup: number,
+  requestServiceId: number
+) {
+  const frame = parseFrame(buf);
+  const expectedServiceGroup = (0x80 | requestServiceGroup) & 0xFFFF;
+  if (frame.serviceGroup !== expectedServiceGroup || frame.serviceId !== requestServiceId) {
+    throw new Error(
+      `Unexpected service response: group=${frame.serviceGroup} id=${frame.serviceId}`
+      + ` (expected group=${expectedServiceGroup} id=${requestServiceId})`
+    );
+  }
+  return frame;
+}
+
 function writeMbuiFixed(writer: BinaryWriter, value: number, bytes: number): void {
   let v = value >>> 0;
   for (let i = 0; i < bytes - 1; i++) {
@@ -201,7 +217,7 @@ export interface DeviceSessionResponse {
 }
 
 export function parseDeviceSessionResponse(buf: ArrayBuffer): DeviceSessionResponse {
-  const frame = parseFrame(buf);
+  const frame = parseExpectedServiceResponseFrame(buf, 1, 10);
   const reader = new BinaryReader(frame.content);
   const entries = readTlvEntries(reader, frame.content.length);
 
@@ -278,7 +294,7 @@ export function buildDeviceLoginChallenge(
 }
 
 export function parseDeviceCryptChallengeResponse(buf: ArrayBuffer): DeviceCryptChallengeResponse {
-  const frame = parseFrame(buf);
+  const frame = parseExpectedServiceResponseFrame(buf, 1, 2);
   const reader = new BinaryReader(frame.content);
   const entries = readTlvEntries(reader, frame.content.length);
 
@@ -337,7 +353,7 @@ export interface DeviceLoginResponse {
 }
 
 export function parseDeviceLoginResponse(buf: ArrayBuffer): DeviceLoginResponse {
-  const frame = parseFrame(buf);
+  const frame = parseExpectedServiceResponseFrame(buf, 1, 2);
   const reader = new BinaryReader(frame.content);
   const entries = readTlvEntries(reader, frame.content.length);
 
@@ -419,7 +435,7 @@ export interface RegisterClientResponse {
 }
 
 export function parseRegisterClientResponse(buf: ArrayBuffer): RegisterClientResponse {
-  const frame = parseFrame(buf);
+  const frame = parseExpectedServiceResponseFrame(buf, 4, 1);
   const reader = new BinaryReader(frame.content);
   const entries = readTlvEntries(reader, frame.content.length);
 
@@ -458,7 +474,7 @@ export function buildIsRegisteredClient(clientId: number, sessionId: number): Ar
 export type RegistrationStatus = 'registered' | 'pending' | 'error' | 'invalid';
 
 export function parseIsRegisteredResponse(buf: ArrayBuffer): { status: RegistrationStatus } {
-  const frame = parseFrame(buf);
+  const frame = parseExpectedServiceResponseFrame(buf, 4, 3);
   const reader = new BinaryReader(frame.content);
   const entries = readTlvEntries(reader, frame.content.length);
 
@@ -618,7 +634,7 @@ export interface PaintDataResponse {
 }
 
 export function parsePaintDataResponse(buf: ArrayBuffer): PaintDataResponse {
-  const frame = parseFrame(buf);
+  const frame = parseExpectedServiceResponseFrame(buf, 4, 4);
   const reader = new BinaryReader(frame.content);
   const entries = readTlvEntries(reader, frame.content.length);
 
