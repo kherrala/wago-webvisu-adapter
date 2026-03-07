@@ -1,16 +1,27 @@
 // Paint command stream parser focused on status color extraction
 
 import { BinaryReader } from './binary';
+import {
+  CMD_SET_FILL_COLOR,
+  CMD_FILL_3D_RECT,
+  CMD_CLEAR_RECT,
+  CMD_DRAW_IMAGE,
+  CMD_TOUCH_HANDLING_FLAGS,
+  CMD_TOUCH_RECTANGLES,
+  CMD_DRAW_TEXT,
+  CMD_DRAW_TEXT_UTF16,
+} from './command-ids';
 
-// Paint command IDs relevant to status detection
-export const CMD_SET_FILL_COLOR = 4;
-export const CMD_FILL_3D_RECT = 23;
-export const CMD_CLEAR_RECT = 7;
-export const CMD_DRAW_IMAGE = 19;
-export const CMD_TOUCH_HANDLING_FLAGS = 42;
-export const CMD_TOUCH_RECTANGLES = 43;
-export const CMD_DRAW_TEXT = 46;
-export const CMD_DRAW_TEXT_UTF16 = 47;
+export {
+  CMD_SET_FILL_COLOR,
+  CMD_FILL_3D_RECT,
+  CMD_CLEAR_RECT,
+  CMD_DRAW_IMAGE,
+  CMD_TOUCH_HANDLING_FLAGS,
+  CMD_TOUCH_RECTANGLES,
+  CMD_DRAW_TEXT,
+  CMD_DRAW_TEXT_UTF16,
+};
 
 export interface PaintCommand {
   id: number;

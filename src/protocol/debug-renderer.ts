@@ -5,47 +5,48 @@ import path from 'path';
 import zlib from 'zlib';
 import pino from 'pino';
 import {
-  CMD_CLEAR_RECT,
-  CMD_DRAW_IMAGE,
-  CMD_FILL_3D_RECT,
-  CMD_SET_FILL_COLOR,
   extractDrawImages,
   ImageDrawCommand,
   PaintCommand,
 } from './paint-commands';
+import {
+  CMD_CLEAR_RECT,
+  CMD_CLEAR_RECT_ALT,
+  CMD_CLEAR_ALL,
+  CMD_DRAW_IMAGE,
+  CMD_DRAW_POINTS,
+  CMD_DRAW_POLYGON,
+  CMD_DRAW_POLYGON_FLOAT,
+  CMD_DRAW_PRIMITIVE,
+  CMD_DRAW_PRIMITIVE_FLOAT_QUAD,
+  CMD_DRAW_PRIMITIVE_FLOAT_RECT,
+  CMD_DRAW_SHAPE,
+  CMD_DRAW_TEXT,
+  CMD_DRAW_TEXT_LEGACY,
+  CMD_DRAW_TEXT_LEGACY_UTF16,
+  CMD_DRAW_TEXT_UTF16,
+  CMD_FILL_3D_RECT,
+  CMD_INIT_VISUALIZATION,
+  CMD_LAYER_SWITCH,
+  CMD_RESTORE_CLIP_RECT,
+  CMD_SET_AREA_STYLE,
+  CMD_SET_AREA_STYLE_LEGACY,
+  CMD_SET_CLIP_RECT,
+  CMD_SET_COMPOSITE_MODE,
+  CMD_SET_CORNER_RADIUS,
+  CMD_SET_FILL_COLOR,
+  CMD_SET_FONT,
+  CMD_SET_PEN_STYLE,
+  CMD_SET_RENDER_PARAMETER,
+  CMD_TOUCH_HANDLING_FLAGS,
+  CMD_TOUCH_RECTANGLES,
+} from './command-ids';
 import { ProtocolPaintFrame } from './client';
 import { PNG } from 'pngjs';
 import jpeg from 'jpeg-js';
 import { Resvg } from '@resvg/resvg-js';
 
 const logger = pino({ name: 'protocol-debug-renderer' });
-
-const CMD_DRAW_SHAPE = 1;
-const CMD_DRAW_POLYGON = 2;
-const CMD_DRAW_TEXT_LEGACY = 3;
-const CMD_DRAW_TEXT_LEGACY_UTF16 = 11;
-const CMD_DRAW_TEXT = 46;
-const CMD_DRAW_TEXT_UTF16 = 47;
-const CMD_SET_PEN_STYLE = 5;
-const CMD_SET_FONT = 6;
-const CMD_SET_CLIP_RECT = 8;
-const CMD_RESTORE_CLIP_RECT = 9;
-const CMD_LAYER_SWITCH = 18;
-const CMD_DRAW_POINTS = 44;
-const CMD_DRAW_PRIMITIVE = 45;
-const CMD_SET_AREA_STYLE_LEGACY = 30;
-const CMD_SET_AREA_STYLE = 48;
-const CMD_DRAW_POLYGON_FLOAT = 59;
-const CMD_DRAW_PRIMITIVE_FLOAT_QUAD = 60;
-const CMD_DRAW_PRIMITIVE_FLOAT_RECT = 61;
-const CMD_INIT_VISUALIZATION = 37;
-const CMD_TOUCH_HANDLING_FLAGS = 42;
-const CMD_TOUCH_RECTANGLES = 43;
-const CMD_SET_RENDER_PARAMETER = 66;
-const CMD_SET_CORNER_RADIUS = 73;
-const CMD_CLEAR_RECT_ALT = 93;
-const CMD_CLEAR_ALL = 105;
-const CMD_SET_COMPOSITE_MODE = 106;
 
 interface SurfaceClipRect {
   x: number;
