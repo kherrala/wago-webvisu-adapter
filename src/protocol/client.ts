@@ -379,20 +379,23 @@ export class WebVisuProtocolClient {
 
     // Step 8: Viewport event
     logger.info('Step 8: Viewport');
-    await this.sendRaw(
-      buildViewportEvent(this.clientId, this.config.viewportWidth, this.config.viewportHeight, 1.0, this.sessionId)
+    await this.expectEmptyInitPaint(
+      'Viewport',
+      buildViewportEvent(this.clientId, this.config.viewportWidth, this.config.viewportHeight, 1.0, this.sessionId),
     );
 
     // Step 9: Capabilities
     logger.info('Step 9: Capabilities');
-    await this.sendRaw(
-      buildCapabilitiesEvent(this.clientId, this.sessionId)
+    await this.expectEmptyInitPaint(
+      'Capabilities',
+      buildCapabilitiesEvent(this.clientId, this.sessionId),
     );
 
     // Step 10: StartVisu
     logger.info('Step 10: StartVisu');
-    await this.sendRaw(
-      buildStartVisuEvent(this.clientId, this.config.startVisu, this.sessionId)
+    await this.expectEmptyInitPaint(
+      'StartVisu',
+      buildStartVisuEvent(this.clientId, this.config.startVisu, this.sessionId),
     );
 
     this.connected = true;
@@ -598,6 +601,10 @@ export class WebVisuProtocolClient {
    */
   async sendEventAndCollect(requestBuf: ArrayBuffer): Promise<{ paintData: PaintDataResponse; allCommands: PaintCommand[] }> {
     this.ensureConnected();
+    return this.sendEventAndCollectInternal(requestBuf);
+  }
+
+  private async sendEventAndCollectInternal(requestBuf: ArrayBuffer): Promise<{ paintData: PaintDataResponse; allCommands: PaintCommand[] }> {
     const resp = await this.sendRaw(requestBuf);
     let paintData = this.handlePaintResponse(resp);
     const allCommandData: Uint8Array[] = [paintData.commands];
@@ -627,6 +634,16 @@ export class WebVisuProtocolClient {
     const allCommands = parsePaintCommands(combined);
     this.validateCollectedPaintCommands(combined, allCommands, declaredCommandCount, responseCount);
     return { paintData, allCommands };
+  }
+
+  private async expectEmptyInitPaint(stepName: string, requestBuf: ArrayBuffer): Promise<void> {
+    const { paintData, allCommands } = await this.sendEventAndCollectInternal(requestBuf);
+    if (paintData.error !== 0) {
+      throw new Error(`Unexpected paint error during ${stepName}: ${paintData.error}`);
+    }
+    if (allCommands.length > 0) {
+      throw new Error(`Unexpected paint commands during ${stepName}: count=${allCommands.length}`);
+    }
   }
 
   async waitForRenderSettled(options: RenderSettleOptions = {}): Promise<RenderSettleResult> {
