@@ -282,7 +282,8 @@ export function parseDeviceCryptChallengeResponse(buf: ArrayBuffer): DeviceCrypt
   const reader = new BinaryReader(frame.content);
   const entries = readTlvEntries(reader, frame.content.length);
 
-  let result = 0;
+  let result130 = 0;
+  let result65410 = 0;
   let token = 0;
   let publicKeyPem: string | null = null;
   let challenge: Uint8Array | null = null;
@@ -293,7 +294,12 @@ export function parseDeviceCryptChallengeResponse(buf: ArrayBuffer): DeviceCrypt
       const innerEntries = readTlvEntries(innerReader, entry.data.length);
       for (const inner of innerEntries) {
         if (inner.tag === 32 && inner.data.length >= 2) {
-          result = new DataView(inner.data.buffer, inner.data.byteOffset, inner.data.byteLength).getUint16(0, true);
+          const value = new DataView(inner.data.buffer, inner.data.byteOffset, inner.data.byteLength).getUint16(0, true);
+          if (entry.tag === 130) {
+            result130 = value;
+          } else {
+            result65410 = value;
+          }
         }
       }
     } else if (entry.tag === 39) {
@@ -307,6 +313,7 @@ export function parseDeviceCryptChallengeResponse(buf: ArrayBuffer): DeviceCrypt
     }
   }
 
+  const result = result130 !== 0 ? result130 : result65410;
   return { result, token, publicKeyPem, challenge };
 }
 
@@ -334,7 +341,8 @@ export function parseDeviceLoginResponse(buf: ArrayBuffer): DeviceLoginResponse 
   const reader = new BinaryReader(frame.content);
   const entries = readTlvEntries(reader, frame.content.length);
 
-  let result = 0;
+  let result130 = 0;
+  let result65410 = 0;
   let deviceSessionId = 0;
   for (const entry of entries) {
     if (entry.tag !== 65410 && entry.tag !== 130) {
@@ -344,13 +352,19 @@ export function parseDeviceLoginResponse(buf: ArrayBuffer): DeviceLoginResponse 
     const innerEntries = readTlvEntries(innerReader, entry.data.length);
     for (const inner of innerEntries) {
       if (inner.tag === 32 && inner.data.length >= 2) {
-        result = new DataView(inner.data.buffer, inner.data.byteOffset, inner.data.byteLength).getUint16(0, true);
+        const value = new DataView(inner.data.buffer, inner.data.byteOffset, inner.data.byteLength).getUint16(0, true);
+        if (entry.tag === 130) {
+          result130 = value;
+        } else {
+          result65410 = value;
+        }
       } else if (inner.tag === 33 && inner.data.length >= 4) {
         deviceSessionId = new DataView(inner.data.buffer, inner.data.byteOffset, inner.data.byteLength).getUint32(0, true);
       }
     }
   }
 
+  const result = result130 !== 0 ? result130 : result65410;
   return { result, deviceSessionId };
 }
 
