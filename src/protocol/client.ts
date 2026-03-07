@@ -651,6 +651,7 @@ export class WebVisuProtocolClient {
       18: 'SetDrawMode',
       19: 'DrawImage',
       23: 'Fill3DRect',
+      24: 'SetCursorStyle',
       37: 'InitVisualization',
       42: 'TouchHandlingFlags',
       43: 'TouchRectangles',

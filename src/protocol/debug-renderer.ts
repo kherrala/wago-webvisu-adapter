@@ -33,6 +33,7 @@ import {
   CMD_SET_AREA_STYLE_LEGACY,
   CMD_SET_CLIP_RECT,
   CMD_SET_COMPOSITE_MODE,
+  CMD_SET_CURSOR_STYLE,
   CMD_SET_CORNER_RADIUS,
   CMD_SET_FILL_COLOR,
   CMD_SET_FONT,
@@ -136,6 +137,7 @@ export class ProtocolDebugRenderer {
   private imagePoolPathById = new Map<string, string>();
   private imageCache = new Map<string, Promise<DecodedRasterImage | null>>();
   private textRasterCache = new Map<string, DecodedRasterImage>();
+  private warnedUnhandledCommandIds = new Set<number>();
   private visualizationNamespace = '';
   private renderParameters = new Map<number, number>();
   private writeQueue: Promise<void> = Promise.resolve();
@@ -489,6 +491,11 @@ export class ProtocolDebugRenderer {
         continue;
       }
 
+      if (command.id === CMD_SET_CURSOR_STYLE) {
+        this.parseCursorStyleCommand(command);
+        continue;
+      }
+
       if (command.id === CMD_INIT_VISUALIZATION) {
         const namespace = this.parseVisualizationNamespace(command);
         if (namespace) {
@@ -796,6 +803,8 @@ export class ProtocolDebugRenderer {
         textLabelCount++;
         continue;
       }
+
+      this.warnUnhandledPaintCommand(command);
     }
 
     return {
@@ -851,7 +860,7 @@ export class ProtocolDebugRenderer {
     return {
       color,
       width: Math.max(1, Math.min(8, widthRaw || 1)),
-      strokeEnabled: lineStyle <= 5,
+      strokeEnabled: lineStyle !== 5,
     };
   }
 
@@ -877,8 +886,8 @@ export class ProtocolDebugRenderer {
       family,
       size,
       color,
-      bold: (styleFlags & 0x1) !== 0,
-      italic: (styleFlags & 0x2) !== 0,
+      bold: (styleFlags & 0x2) !== 0,
+      italic: (styleFlags & 0x1) !== 0,
       underline: (styleFlags & 0x4) !== 0,
       strikeout: (styleFlags & 0x8) !== 0,
     };
@@ -923,7 +932,10 @@ export class ProtocolDebugRenderer {
   }
 
   private parseClipRectCommand(command: PaintCommand): SurfaceClipRect | null {
-    return this.parseRectFromTwoPoints(command, 0, false);
+    const rect = this.parseRectFromTwoPoints(command, 0, false);
+    if (!rect) return null;
+    // Reference SetClipRect adds +1 to width/height: a.rect(left, top, getWidth()+1, getHeight()+1)
+    return { x: rect.x, y: rect.y, width: rect.width + 1, height: rect.height + 1 };
   }
 
   private parseCornerRadiusCommand(command: PaintCommand): { x: number; y: number } | null {
@@ -935,6 +947,42 @@ export class ProtocolDebugRenderer {
       x: dv.getInt16(0, true),
       y: dv.getInt16(2, true),
     };
+  }
+
+  private parseCursorStyleCommand(command: PaintCommand): string | null {
+    if (command.data.length < 2) {
+      return null;
+    }
+    const dv = new DataView(command.data.buffer, command.data.byteOffset, command.data.byteLength);
+    const styleId = dv.getUint16(0, true);
+    const map: Record<number, string> = {
+      0: 'pointer',
+      1: 'default',
+      2: 'pointer',
+      3: 'wait',
+      4: 'text',
+      5: 'crosshair',
+      6: 'help',
+      7: 'col-resize',
+      8: 'row-resize',
+      9: 'nw-resize',
+      10: 'ne-resize',
+      11: 'w-resize',
+      12: 's-resize',
+      13: 'pointer',
+    };
+    return map[styleId] ?? 'default';
+  }
+
+  private warnUnhandledPaintCommand(command: PaintCommand): void {
+    if (this.warnedUnhandledCommandIds.has(command.id)) {
+      return;
+    }
+    this.warnedUnhandledCommandIds.add(command.id);
+    logger.warn(
+      { commandId: command.id, size: command.size, dataLength: command.data.length },
+      'Unhandled paint command encountered',
+    );
   }
 
   private parseTextDrawCommand(command: PaintCommand, utf16: boolean, legacyQuadRect: boolean): TextDrawCommand | null {
@@ -1317,8 +1365,8 @@ export class ProtocolDebugRenderer {
   private normalizeClipRectFromPoints(x1: number, y1: number, x2: number, y2: number): SurfaceClipRect {
     const left = Math.min(x1, x2);
     const top = Math.min(y1, y2);
-    const width = Math.abs(x2 - x1) + 1;
-    const height = Math.abs(y2 - y1) + 1;
+    const width = Math.abs(x2 - x1);
+    const height = Math.abs(y2 - y1);
     return this.normalizeClipRect(left, top, width, height);
   }
 
