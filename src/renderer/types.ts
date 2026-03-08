@@ -65,6 +65,25 @@ export interface TextDrawCommand {
 
 export type PrimitiveShapeKind = 0 | 1 | 2 | 3 | 4;
 
+/**
+ * Parsed gradient fill state — equivalent of the GradientFill object in webvisu-deobfuscated.js
+ * with angle/colors already adjusted by the constructor swap logic.
+ */
+export interface GradientState {
+  /** 0 = linear, 1 = radial, 2 = linear reflected */
+  type: 0 | 1 | 2;
+  /** Angle in degrees, 0–180 (adjusted: if original > 180, subtract 180 and swap colors) */
+  angle: number;
+  /** Radial horizontal center as fraction 0–1 */
+  centerX: number;
+  /** Radial vertical center as fraction 0–1 */
+  centerY: number;
+  /** Gradient start color */
+  color1: RgbaColor;
+  /** Gradient end color */
+  color2: RgbaColor;
+}
+
 export interface ProtocolDebugRendererOptions {
   outputDir: string;
   width: number;

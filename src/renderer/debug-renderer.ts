@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
 import {
+  GradientState,
   RgbaColor,
   SurfaceClipRect,
   FontState,
@@ -368,6 +369,7 @@ export class ProtocolDebugRenderer {
   private async applyCommands(commands: PaintCommand[]): Promise<RenderStats> {
     this.activeLayerId = -1;
     let currentFill: RgbaColor = { r: 255, g: 255, b: 255, a: 255 };
+    let currentGradient: GradientState | null = null;
     let fillDisabled = false;
     let currentPen: PenState = {
       color: { r: 0, g: 0, b: 0, a: 255 },
@@ -404,6 +406,7 @@ export class ProtocolDebugRenderer {
         if (fill) {
           currentFill = fill.color;
           fillDisabled = fill.disabled;
+          currentGradient = null;
         }
         continue;
       }
@@ -429,6 +432,7 @@ export class ProtocolDebugRenderer {
         if (areaStyle) {
           currentFill = areaStyle.fillColor;
           fillDisabled = areaStyle.fillDisabled;
+          currentGradient = areaStyle.gradient;
           currentPen = {
             ...currentPen,
             color: areaStyle.borderColor,
@@ -509,7 +513,11 @@ export class ProtocolDebugRenderer {
           const shouldFill = polygon.mode === 0 && !fillDisabled;
           const shouldStroke = currentPen.strokeEnabled;
           if (shouldFill && polygon.points.length >= 3) {
-            surface.fillPolygon(polygon.points, withVisibleAlpha(currentFill), clipRect ?? undefined);
+            if (currentGradient) {
+              surface.fillPolygonGradient(polygon.points, currentGradient, clipRect ?? undefined);
+            } else {
+              surface.fillPolygon(polygon.points, withVisibleAlpha(currentFill), clipRect ?? undefined);
+            }
           }
           if (shouldStroke) {
             if (polygon.mode === 0) {
@@ -635,14 +643,25 @@ export class ProtocolDebugRenderer {
 
         if (primitive.kind === 2) {
           if (shouldFill) {
-            surface.fillEllipse(
-              primitive.x,
-              primitive.y,
-              primitive.width,
-              primitive.height,
-              fillColor,
-              clipRect ?? undefined,
-            );
+            if (currentGradient) {
+              surface.fillEllipseGradient(
+                primitive.x,
+                primitive.y,
+                primitive.width,
+                primitive.height,
+                currentGradient,
+                clipRect ?? undefined,
+              );
+            } else {
+              surface.fillEllipse(
+                primitive.x,
+                primitive.y,
+                primitive.width,
+                primitive.height,
+                fillColor,
+                clipRect ?? undefined,
+              );
+            }
           }
           if (currentPen.strokeEnabled) {
             surface.strokeEllipse(
@@ -662,16 +681,27 @@ export class ProtocolDebugRenderer {
 
         if (primitive.kind === 1) {
           if (shouldFill) {
-            surface.fillRoundedRect(
-              primitive.x,
-              primitive.y,
-              primitive.width,
-              primitive.height,
-              cornerRadiusX,
-              cornerRadiusY,
-              fillColor,
-              clipRect ?? undefined,
-            );
+            if (currentGradient) {
+              surface.fillRectGradient(
+                primitive.x,
+                primitive.y,
+                primitive.width,
+                primitive.height,
+                currentGradient,
+                clipRect ?? undefined,
+              );
+            } else {
+              surface.fillRoundedRect(
+                primitive.x,
+                primitive.y,
+                primitive.width,
+                primitive.height,
+                cornerRadiusX,
+                cornerRadiusY,
+                fillColor,
+                clipRect ?? undefined,
+              );
+            }
           }
           if (currentPen.strokeEnabled) {
             surface.strokeRoundedRect(
@@ -693,14 +723,25 @@ export class ProtocolDebugRenderer {
         }
 
         if (shouldFill) {
-          surface.fillRect(
-            primitive.x,
-            primitive.y,
-            primitive.width,
-            primitive.height,
-            fillColor,
-            clipRect ?? undefined,
-          );
+          if (currentGradient) {
+            surface.fillRectGradient(
+              primitive.x,
+              primitive.y,
+              primitive.width,
+              primitive.height,
+              currentGradient,
+              clipRect ?? undefined,
+            );
+          } else {
+            surface.fillRect(
+              primitive.x,
+              primitive.y,
+              primitive.width,
+              primitive.height,
+              fillColor,
+              clipRect ?? undefined,
+            );
+          }
         }
         if (currentPen.strokeEnabled) {
           surface.strokeRect(

@@ -1,11 +1,13 @@
 import {
   RgbaColor,
   FontState,
+  GradientState,
   PenState,
   SurfaceClipRect,
   argbToColor,
   withVisibleAlpha,
 } from './types';
+import { CMD_SET_AREA_STYLE_LEGACY } from '../protocol/command-ids';
 import { parseRectFromTwoPoints } from './geometry';
 import { PaintCommand } from '../protocol/paint-commands';
 
@@ -104,19 +106,111 @@ export function parseFontCommand(command: PaintCommand, fallback: FontState): Fo
   };
 }
 
+/**
+ * Parses CMD_SET_AREA_STYLE (48) and CMD_SET_AREA_STYLE_LEGACY (30).
+ *
+ * Binary layout (webvisu-deobfuscated.js AreaGradientStyle, lines 6797–6812):
+ *
+ * Common header (both formats):
+ *   offset  0 (uint32): gradientEnabled — 1 = gradient active, 0 = solid fill
+ *   offset  4 (uint32): color1 ARGB — gradient start color (or border color in solid mode)
+ *   offset  8 (uint32): color2 ARGB — gradient end color (or fill color in solid mode)
+ *
+ * Legacy (id=30), offsets 12+:
+ *   offset 12 (uint32): angle in degrees
+ *   offset 16 (uint32): horizontal center percentage (0–100, divide by 100 → 0–1)
+ *   offset 20 (uint32): vertical center percentage (0–100, divide by 100 → 0–1)
+ *   offset 24 (uint32): gradient type (0=linear, 1=radial, 2=reflected)
+ *   offset 28 (uint32): swapColors — 0 = swap, non-zero = don't swap
+ *   offset 32 (uint32): (padding, skip)
+ *   offset 36 (uint32): color3 ARGB
+ *
+ * Modern (id=48), offsets 12+:
+ *   offset 12 (uint16): angle in degrees
+ *   offset 14 (uint8):  horizontal center percentage (divide by 100)
+ *   offset 15 (uint8):  vertical center percentage (divide by 100)
+ *   offset 16 (uint8):  gradient type (0=linear, 1=radial, 2=reflected)
+ *   swapColors = always true, color3 = 0
+ */
 export function parseAreaStyleCommand(command: PaintCommand): {
   fillColor: RgbaColor;
   borderColor: RgbaColor;
   fillDisabled: boolean;
+  gradient: GradientState | null;
 } | null {
-  if (command.data.length < 12) {
+  const isLegacy = command.id === CMD_SET_AREA_STYLE_LEGACY;
+  const minLen = isLegacy ? 40 : 17;
+  if (command.data.length < minLen) {
     return null;
   }
+
   const dv = new DataView(command.data.buffer, command.data.byteOffset, command.data.byteLength);
-  const fillDisabled = dv.getUint32(0, true) === 1;
-  const borderColor = withVisibleAlpha(argbToColor(dv.getUint32(4, true)));
-  const fillColor = withVisibleAlpha(argbToColor(dv.getUint32(8, true)));
-  return { fillColor, borderColor, fillDisabled };
+  const gradientEnabled = dv.getUint32(0, true) === 1;
+  const color1 = withVisibleAlpha(argbToColor(dv.getUint32(4, true)));
+  const color2 = withVisibleAlpha(argbToColor(dv.getUint32(8, true)));
+
+  // In solid mode, color1 = border/pen color, color2 = fill color (empirical convention).
+  const borderColor = color1;
+  const fillColor = color2;
+
+  if (!gradientEnabled) {
+    return { fillColor, borderColor, fillDisabled: false, gradient: null };
+  }
+
+  // Parse gradient parameters
+  let angleDeg: number;
+  let hCenter: number;
+  let vCenter: number;
+  let gradientType: number;
+  let swapColors: boolean;
+  let color3 = withVisibleAlpha(argbToColor(0));
+
+  if (isLegacy) {
+    angleDeg = dv.getUint32(12, true);
+    hCenter = dv.getUint32(16, true) / 100;
+    vCenter = dv.getUint32(20, true) / 100;
+    gradientType = dv.getUint32(24, true);
+    swapColors = dv.getUint32(28, true) === 0;
+    color3 = withVisibleAlpha(argbToColor(dv.getUint32(36, true)));
+  } else {
+    angleDeg = dv.getUint16(12, true);
+    hCenter = dv.getUint8(14) / 100;
+    vCenter = dv.getUint8(15) / 100;
+    gradientType = dv.getUint8(16);
+    swapColors = true;
+  }
+
+  const type = (gradientType === 0 || gradientType === 1 || gradientType === 2)
+    ? gradientType as 0 | 1 | 2
+    : 0;
+
+  // Replicate GradientFill constructor color/angle swap logic
+  // (webvisu-deobfuscated.js lines 623–624):
+  //   (type 0 or 2) && angle > 180 → angle -= 180, bi = swapColors ? color2 : color3, tg = color1
+  //   else                         → bi = color1, tg = swapColors ? color2 : color3
+  let finalAngle = angleDeg % 360;
+  let gradColor1: RgbaColor;
+  let gradColor2: RgbaColor;
+
+  if ((type === 0 || type === 2) && finalAngle > 180) {
+    finalAngle -= 180;
+    gradColor1 = swapColors ? color2 : color3;
+    gradColor2 = color1;
+  } else {
+    gradColor1 = color1;
+    gradColor2 = swapColors ? color2 : color3;
+  }
+
+  const gradient: GradientState = {
+    type,
+    angle: finalAngle,
+    centerX: hCenter,
+    centerY: vCenter,
+    color1: gradColor1,
+    color2: gradColor2,
+  };
+
+  return { fillColor, borderColor, fillDisabled: false, gradient };
 }
 
 export function parseVisualizationNamespace(command: PaintCommand): string | null {

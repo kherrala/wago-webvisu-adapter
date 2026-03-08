@@ -1,4 +1,5 @@
-import { RgbaColor, SurfaceClipRect, SurfacePoint } from './types';
+import { GradientState, RgbaColor, SurfaceClipRect, SurfacePoint } from './types';
+import { sampleGradient } from './gradient';
 
 export class PixelSurface {
   readonly width: number;
@@ -89,6 +90,137 @@ export class PixelSurface {
         this.pixels[offset + 2] = Math.round((color.b * alpha) + (db * inverse));
         this.pixels[offset + 3] = 255;
         offset += 4;
+      }
+    }
+  }
+
+  /**
+   * Fills a rectangle with a gradient. The gradient is sampled using the rect's own
+   * bounding box as the gradient space, matching the reference GradientFill.gz() behaviour.
+   */
+  fillRectGradient(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    gradient: GradientState,
+    clip?: SurfaceClipRect,
+  ): void {
+    const bounds = this.getDrawBounds(x, y, width, height, clip);
+    if (!bounds) return;
+    const left = x;
+    const top = y;
+    const right = x + width;
+    const bottom = y + height;
+    for (let py = bounds.y0; py < bounds.y1; py++) {
+      let offset = ((py * this.width) + bounds.x0) * 4;
+      for (let px = bounds.x0; px < bounds.x1; px++) {
+        const color = sampleGradient(px + 0.5, py + 0.5, left, top, right, bottom, gradient);
+        const sa = Math.max(0, Math.min(255, color.a)) / 255;
+        const da = 1 - sa;
+        this.pixels[offset] = Math.round(color.r * sa + this.pixels[offset] * da);
+        this.pixels[offset + 1] = Math.round(color.g * sa + this.pixels[offset + 1] * da);
+        this.pixels[offset + 2] = Math.round(color.b * sa + this.pixels[offset + 2] * da);
+        this.pixels[offset + 3] = 255;
+        offset += 4;
+      }
+    }
+  }
+
+  /**
+   * Fills an ellipse with a gradient, using the ellipse bounding box as gradient space.
+   */
+  fillEllipseGradient(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    gradient: GradientState,
+    clip?: SurfaceClipRect,
+  ): void {
+    const bounds = this.getDrawBounds(x, y, width, height, clip);
+    if (!bounds) return;
+    const rx = Math.max(0.5, bounds.width / 2);
+    const ry = Math.max(0.5, bounds.height / 2);
+    const cx = bounds.left + bounds.width / 2;
+    const cy = bounds.top + bounds.height / 2;
+    const left = x;
+    const top = y;
+    const right = x + width;
+    const bottom = y + height;
+    for (let py = bounds.y0; py < bounds.y1; py++) {
+      const ny = ((py + 0.5) - cy) / ry;
+      for (let px = bounds.x0; px < bounds.x1; px++) {
+        const nx = ((px + 0.5) - cx) / rx;
+        if ((nx * nx) + (ny * ny) > 1) continue;
+        const color = sampleGradient(px + 0.5, py + 0.5, left, top, right, bottom, gradient);
+        const sa = Math.max(0, Math.min(255, color.a)) / 255;
+        const da = 1 - sa;
+        const offset = ((py * this.width) + px) * 4;
+        this.pixels[offset] = Math.round(color.r * sa + this.pixels[offset] * da);
+        this.pixels[offset + 1] = Math.round(color.g * sa + this.pixels[offset + 1] * da);
+        this.pixels[offset + 2] = Math.round(color.b * sa + this.pixels[offset + 2] * da);
+        this.pixels[offset + 3] = 255;
+      }
+    }
+  }
+
+  /**
+   * Fills a polygon with a gradient, using the polygon's bounding box as gradient space.
+   */
+  fillPolygonGradient(
+    points: SurfacePoint[],
+    gradient: GradientState,
+    clip?: SurfaceClipRect,
+  ): void {
+    if (points.length < 3) return;
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const left = minX;
+    const top = minY;
+    const right = maxX;
+    const bottom = maxY;
+    const yStart = Math.max(0, Math.floor(minY));
+    const yEnd = Math.min(this.height - 1, Math.ceil(maxY));
+    for (let y = yStart; y <= yEnd; y++) {
+      const intersections: number[] = [];
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[(i + 1) % points.length];
+        const crosses = (a.y <= y && b.y > y) || (b.y <= y && a.y > y);
+        if (!crosses) continue;
+        const t = (y - a.y) / (b.y - a.y);
+        intersections.push(a.x + t * (b.x - a.x));
+      }
+      intersections.sort((a, b) => a - b);
+      for (let i = 0; i + 1 < intersections.length; i += 2) {
+        let x0 = Math.floor(intersections[i]);
+        let x1 = Math.ceil(intersections[i + 1]);
+        if (clip) {
+          x0 = Math.max(x0, Math.floor(clip.x));
+          x1 = Math.min(x1, Math.ceil(clip.x + clip.width));
+        }
+        x0 = Math.max(0, x0);
+        x1 = Math.min(this.width, x1);
+        let offset = ((y * this.width) + x0) * 4;
+        for (let px = x0; px <= x1; px++) {
+          const color = sampleGradient(px + 0.5, y + 0.5, left, top, right, bottom, gradient);
+          const sa = Math.max(0, Math.min(255, color.a)) / 255;
+          const da = 1 - sa;
+          this.pixels[offset] = Math.round(color.r * sa + this.pixels[offset] * da);
+          this.pixels[offset + 1] = Math.round(color.g * sa + this.pixels[offset + 1] * da);
+          this.pixels[offset + 2] = Math.round(color.b * sa + this.pixels[offset + 2] * da);
+          this.pixels[offset + 3] = 255;
+          offset += 4;
+        }
       }
     }
   }
