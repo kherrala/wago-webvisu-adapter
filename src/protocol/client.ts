@@ -4,6 +4,7 @@ import fs from 'fs';
 import https from 'https';
 import path from 'path';
 import { constants, createHash, createPublicKey, publicEncrypt } from 'crypto';
+import { deflateSync } from 'zlib';
 import {
   buildOpenConnection,
   parseOpenConnectionResponse,
@@ -1266,7 +1267,7 @@ export class WebVisuProtocolClient {
       const commands = parsePaintCommands(paint.commands);
       const images = extractDrawImages(commands);
       const labels = extractTextLabels(commands);
-      return {
+      const result: Record<string, unknown> = {
         paintCommands: commands.map((cmd, index) => ({
           index,
           id: cmd.id,
@@ -1293,6 +1294,12 @@ export class WebVisuProtocolClient {
           flags: label.flags,
         })),
       };
+      // Store raw paint command bytes (deflate-compressed, base64-encoded) for offline replay.
+      if (paint.commands.length > 0) {
+        const compressed = deflateSync(Buffer.from(paint.commands));
+        result.paintCommandsRaw = compressed.toString('base64');
+      }
+      return result;
     } catch {
       return undefined;
     }
