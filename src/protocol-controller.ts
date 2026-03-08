@@ -12,7 +12,7 @@ import { IWebVisuController, LightStatus } from './controller-interface';
 import { WebVisuProtocolClient } from './protocol/client';
 import { buildViewportEvent } from './protocol/messages';
 import { PaintCommand } from './protocol/paint-commands';
-import { ProtocolDebugRenderer } from './protocol/debug-renderer';
+import { ProtocolDebugRenderer } from './renderer';
 import pino from 'pino';
 
 // Model & utilities
