@@ -175,6 +175,8 @@ export class ProtocolDebugRenderer {
   }
 
   async renderPreview(commands: PaintCommand[]): Promise<Buffer> {
+    // Ensure queued async frame applications are reflected in preview output.
+    await this.writeQueue;
     await this.applyCommands(commands);
     const png = this.renderCurrentSurface(undefined);
     this.latestPng = Buffer.from(png);
@@ -838,13 +840,22 @@ export class ProtocolDebugRenderer {
     }
 
     const stripe = this.getEventStripeColor(eventTag);
-    frame.fillRect(0, 0, this.options.width, 4, stripe);
+
+    // Crop to content bounds before encoding to eliminate empty viewport whitespace.
+    const bounds = frame.contentBounds();
+    const output = bounds
+      ? frame.crop(bounds.x, bounds.y, bounds.width, bounds.height)
+      : frame;
+
+    output.fillRect(0, 0, output.width, 4, stripe);
     if (eventPosition) {
       const marker = { r: 245, g: 86, b: 86, a: 255 };
-      frame.strokeRect(eventPosition.x - 3, eventPosition.y - 3, 7, 7, marker, 1);
-      frame.fillRect(eventPosition.x - 1, eventPosition.y - 1, 3, 3, marker);
+      const ex = eventPosition.x - (bounds?.x ?? 0);
+      const ey = eventPosition.y - (bounds?.y ?? 0);
+      output.strokeRect(ex - 3, ey - 3, 7, 7, marker, 1);
+      output.fillRect(ex - 1, ey - 1, 3, 3, marker);
     }
-    return encodeRgbaPng(frame.width, frame.height, frame.pixels);
+    return encodeRgbaPng(output.width, output.height, output.pixels);
   }
 
   private buildCommandHistogram(commands: PaintCommand[]): Record<number, number> {

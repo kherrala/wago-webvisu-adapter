@@ -20,6 +20,49 @@ export class PixelSurface {
     return cloned;
   }
 
+  /**
+   * Returns the bounding box of pixels that differ from the background color,
+   * or null if the entire surface matches the background.
+   */
+  contentBounds(): { x: number; y: number; width: number; height: number } | null {
+    const { r: br, g: bg, b: bb } = this.background;
+    let minX = this.width;
+    let minY = this.height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let py = 0; py < this.height; py++) {
+      let offset = py * this.width * 4;
+      for (let px = 0; px < this.width; px++) {
+        if (
+          this.pixels[offset] !== br
+          || this.pixels[offset + 1] !== bg
+          || this.pixels[offset + 2] !== bb
+        ) {
+          if (px < minX) minX = px;
+          if (px > maxX) maxX = px;
+          if (py < minY) minY = py;
+          if (py > maxY) maxY = py;
+        }
+        offset += 4;
+      }
+    }
+    if (maxX < 0) return null;
+    return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+  }
+
+  /**
+   * Returns a new PixelSurface containing the specified sub-region.
+   */
+  crop(x: number, y: number, width: number, height: number): PixelSurface {
+    const cropped = new PixelSurface(width, height, this.background);
+    for (let py = 0; py < height; py++) {
+      const srcRow = ((y + py) * this.width + x) * 4;
+      const dstRow = py * width * 4;
+      cropped.pixels.set(this.pixels.subarray(srcRow, srcRow + width * 4), dstRow);
+    }
+    return cropped;
+  }
+
   fillRect(
     x: number,
     y: number,
