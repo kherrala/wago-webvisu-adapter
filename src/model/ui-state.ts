@@ -4,6 +4,8 @@ export interface DropdownLabel {
   text: string;
   index: number;
   row: number;
+  left: number;
+  right: number;
   top: number;
   bottom: number;
 }
@@ -41,11 +43,13 @@ export class UIState {
     return index >= this.dropdownFirstVisible && index < this.dropdownFirstVisible + visibleItems;
   }
 
-  getTargetFirstVisible(index: number): number {
+  getTargetFirstVisible(index: number, preferredRow?: number): number {
     const visibleItems = uiCoordinates.lightSwitches.dropdownList.visibleItems;
     const maxFirstVisible = this.getDropdownMaxFirstVisible();
-    const centerOffset = Math.floor(visibleItems / 2);
-    const preferredFirstVisible = Math.min(Math.max(0, index - centerOffset), maxFirstVisible);
+    const defaultPreferredRow = Math.floor(visibleItems / 2);
+    const requestedPreferredRow = preferredRow ?? defaultPreferredRow;
+    const clampedPreferredRow = Math.max(0, Math.min(visibleItems - 1, requestedPreferredRow));
+    const preferredFirstVisible = Math.min(Math.max(0, index - clampedPreferredRow), maxFirstVisible);
     const minimumFirstVisible = Math.max(0, index - (visibleItems - 1));
     return Math.max(minimumFirstVisible, Math.min(preferredFirstVisible, maxFirstVisible));
   }

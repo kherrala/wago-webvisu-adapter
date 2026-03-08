@@ -165,12 +165,12 @@ export function parseCornerRadiusCommand(command: PaintCommand): { x: number; y:
   };
 }
 
-export function parseLayerSwitchCommand(command: PaintCommand): boolean | null {
+export function parseLayerSwitchCommand(command: PaintCommand): number | null {
   if (command.data.length < 2) {
     return null;
   }
   const dv = new DataView(command.data.buffer, command.data.byteOffset, command.data.byteLength);
-  return dv.getUint16(0, true) === 1;
+  return dv.getInt16(0, true);
 }
 
 export function parseCursorStyleCommand(command: PaintCommand): string | null {

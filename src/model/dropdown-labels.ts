@@ -31,7 +31,15 @@ export function extractDropdownLabels(commands: PaintCommand[]): DropdownLabel[]
     const centerY = Math.round((label.top + label.bottom) / 2);
     const row = Math.floor((centerY - dropdown.firstItemY) / dropdown.itemHeight);
     if (row < 0 || row >= dropdown.visibleItems) continue;
-    matched.push({ text: label.text, index, row, top: label.top, bottom: label.bottom });
+    matched.push({
+      text: label.text,
+      index,
+      row,
+      left: label.left,
+      right: label.right,
+      top: label.top,
+      bottom: label.bottom,
+    });
   }
 
   return matched;

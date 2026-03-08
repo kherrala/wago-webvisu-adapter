@@ -23,8 +23,8 @@ import {
   parseRenderParameterCommand,
   parseClipRectCommand,
   parseCornerRadiusCommand,
-  parseLayerSwitchCommand,
   parseCursorStyleCommand,
+  parseLayerSwitchCommand,
 } from './state-parsers';
 import {
   parsePrimitiveCommand,
@@ -87,8 +87,10 @@ export class ProtocolDebugRenderer {
   private readonly sessionDir: string;
   private readonly timelinePath: string;
   private readonly backgroundColor: RgbaColor = { r: 255, g: 255, b: 255, a: 255 };
+  private readonly transparentColor: RgbaColor = { r: 0, g: 0, b: 0, a: 0 };
   private readonly surface: PixelSurface;
-  private readonly overlaySurface: PixelSurface;
+  private readonly layers = new Map<number, PixelSurface>();
+  private activeLayerId = -1;
   private readonly imageLoader: ImageLoader | null;
   private readonly textRenderer = new TextRenderer();
   private warnedUnhandledCommandIds = new Set<number>();
@@ -121,11 +123,6 @@ export class ProtocolDebugRenderer {
       this.options.width,
       this.options.height,
       this.backgroundColor,
-    );
-    this.overlaySurface = new PixelSurface(
-      this.options.width,
-      this.options.height,
-      { r: 0, g: 0, b: 0, a: 0 },
     );
 
     if (this.options.noDisk) {
@@ -260,6 +257,26 @@ export class ProtocolDebugRenderer {
     this.imageLoader?.destroy();
   }
 
+  private activeSurface(): PixelSurface {
+    if (this.activeLayerId === -1) {
+      return this.surface;
+    }
+    return this.getOrCreateLayer(this.activeLayerId);
+  }
+
+  private getOrCreateLayer(layerId: number): PixelSurface {
+    let layer = this.layers.get(layerId);
+    if (!layer) {
+      layer = new PixelSurface(this.options.width, this.options.height, this.transparentColor);
+      this.layers.set(layerId, layer);
+    }
+    return layer;
+  }
+
+  private clearColor(): RgbaColor {
+    return this.activeLayerId === -1 ? this.backgroundColor : this.transparentColor;
+  }
+
   private async persistFrame(index: number, frame: ProtocolPaintFrame): Promise<void> {
     const stats = await this.applyCommands(frame.commands);
     const png = this.renderCurrentSurface(
@@ -347,6 +364,7 @@ export class ProtocolDebugRenderer {
   }
 
   private async applyCommands(commands: PaintCommand[]): Promise<RenderStats> {
+    this.activeLayerId = -1;
     let currentFill: RgbaColor = { r: 255, g: 255, b: 255, a: 255 };
     let fillDisabled = false;
     let currentPen: PenState = {
@@ -372,8 +390,6 @@ export class ProtocolDebugRenderer {
     const clipStack: SurfaceClipRect[] = [];
     let cornerRadiusX = -1;
     let cornerRadiusY = -1;
-    let drawToOverlay = false;
-    const activeSurface = () => (drawToOverlay ? this.overlaySurface : this.surface);
     let imageCount = 0;
     let processedImageCount = 0;
     let skippedImageCount = 0;
@@ -420,9 +436,9 @@ export class ProtocolDebugRenderer {
       }
 
       if (command.id === CMD_LAYER_SWITCH) {
-        const nextLayer = parseLayerSwitchCommand(command);
-        if (nextLayer !== null) {
-          drawToOverlay = nextLayer;
+        const layerId = parseLayerSwitchCommand(command);
+        if (layerId !== null) {
+          this.activeLayerId = layerId;
         }
         continue;
       }
@@ -487,7 +503,7 @@ export class ProtocolDebugRenderer {
       if (command.id === CMD_DRAW_POLYGON || command.id === CMD_DRAW_POLYGON_FLOAT) {
         const polygon = parsePolygonCommand(command);
         if (polygon && polygon.points.length >= 2) {
-          const surface = activeSurface();
+          const surface = this.activeSurface();
           const shouldFill = polygon.mode === 0 && !fillDisabled;
           const shouldStroke = currentPen.strokeEnabled;
           if (shouldFill && polygon.points.length >= 3) {
@@ -532,7 +548,7 @@ export class ProtocolDebugRenderer {
       if (command.id === CMD_FILL_3D_RECT) {
         const parsed = parseFill3dRectCommand(command);
         if (!parsed) continue;
-        const surface = activeSurface();
+        const surface = this.activeSurface();
         // Reference Fill3DRect always fills with its own color (not currentFill),
         // does NOT check fillDisabled/wm(), and uses lineWidth=1 for borders.
         surface.fillRect(
@@ -560,7 +576,7 @@ export class ProtocolDebugRenderer {
         if (!points || fillDisabled) {
           continue;
         }
-        const surface = activeSurface();
+        const surface = this.activeSurface();
         const color = withVisibleAlpha(currentFill);
         for (const point of points) {
           surface.fillRect(point.x, point.y, 1, 1, color, clipRect ?? undefined);
@@ -576,7 +592,7 @@ export class ProtocolDebugRenderer {
       ) {
         const primitive = parsePrimitiveCommand(command);
         if (!primitive) continue;
-        const surface = activeSurface();
+        const surface = this.activeSurface();
         const strokeColor = withVisibleAlpha(currentPen.color);
         const fillColor = withVisibleAlpha(currentFill);
         const shouldFill = !fillDisabled;
@@ -704,20 +720,19 @@ export class ProtocolDebugRenderer {
       if (command.id === CMD_CLEAR_RECT || command.id === CMD_CLEAR_RECT_ALT) {
         const parsed = parseRectFromTwoPoints(command);
         if (!parsed) continue;
-        activeSurface().clearRect(
+        this.activeSurface().clearRect(
           parsed.x,
           parsed.y,
           parsed.width,
           parsed.height,
-          this.backgroundColor,
+          this.clearColor(),
           clipRect ?? undefined,
         );
         continue;
       }
 
       if (command.id === CMD_CLEAR_ALL) {
-        this.surface.clearRect(0, 0, this.options.width, this.options.height, this.backgroundColor, clipRect ?? undefined);
-        this.overlaySurface.clearRect(0, 0, this.options.width, this.options.height, { r: 0, g: 0, b: 0, a: 0 }, clipRect ?? undefined);
+        this.activeSurface().clearRect(0, 0, this.options.width, this.options.height, this.clearColor(), clipRect ?? undefined);
         continue;
       }
 
@@ -739,7 +754,7 @@ export class ProtocolDebugRenderer {
         if (this.imageLoader) {
           const external = await this.imageLoader.resolveExternalImage(image.imageId);
           if (external) {
-            activeSurface().blitRgbaImage(
+            this.activeSurface().blitRgbaImage(
               external.data,
               external.width,
               external.height,
@@ -755,7 +770,7 @@ export class ProtocolDebugRenderer {
         }
 
         if (!renderedFromSource) {
-          const surface = activeSurface();
+          const surface = this.activeSurface();
           const style = resolveImageStyle(image.imageId, image.flags, image.tintColor);
           if (style.fill) {
             surface.fillRect(image.x, image.y, image.width, image.height, style.fill, clipRect ?? undefined);
@@ -779,7 +794,7 @@ export class ProtocolDebugRenderer {
         );
         if (!label) continue;
         this.textRenderer.renderTextLabel(
-          activeSurface(),
+          this.activeSurface(),
           label,
           currentFont,
           clipRect ?? undefined,
@@ -802,18 +817,26 @@ export class ProtocolDebugRenderer {
   }
 
   private renderCurrentSurface(eventTag?: number, eventPosition?: { x: number; y: number }): Buffer {
+    // Composite layers onto base surface clone.
+    // Order: base (white bg) → highest layer ID first → layer 0 last (foreground on top).
     const frame = this.surface.clone();
-    frame.blitRgbaImage(
-      this.overlaySurface.pixels,
-      this.overlaySurface.width,
-      this.overlaySurface.height,
-      0,
-      0,
-      this.overlaySurface.width,
-      this.overlaySurface.height,
-      null,
-      undefined,
-    );
+
+    if (this.layers.size > 0) {
+      const sortedIds = [...this.layers.keys()].sort((a, b) => b - a);
+      for (const layerId of sortedIds) {
+        const layer = this.layers.get(layerId)!;
+        frame.blitRgbaImage(
+          layer.pixels,
+          layer.width,
+          layer.height,
+          0, 0,
+          layer.width,
+          layer.height,
+          null,
+        );
+      }
+    }
+
     const stripe = this.getEventStripeColor(eventTag);
     frame.fillRect(0, 0, this.options.width, 4, stripe);
     if (eventPosition) {

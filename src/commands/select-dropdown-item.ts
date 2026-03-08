@@ -3,7 +3,11 @@ import { PaintCommand } from '../protocol/paint-commands';
 import { CommandContext } from '../model/command-context';
 import { PaintCollector } from '../model/paint-collector';
 import { DropdownView, isViewReadyForClick } from '../model/dropdown-labels';
-import { DropdownSelectionResult, extractDropdownHeaderLabel } from '../model/header-verification';
+import {
+  DropdownSelectionResult,
+  extractDropdownHeaderLabel,
+  isExpectedDropdownHeader,
+} from '../model/header-verification';
 import { resolveTouchValidatedDropdownClickY } from '../model/touch-validation';
 import { resolveLightIndexFromLabel } from '../model/text-utils';
 import { waitForDropdownReady } from '../model/wait-for-dropdown';
@@ -12,6 +16,18 @@ import { resolveIndicatorImages, resolveLampStatus } from './resolve-light-statu
 import pino from 'pino';
 
 const logger = pino({ name: 'select-dropdown-item' });
+
+function uniqInts(values: number[]): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const value of values) {
+    const n = Math.round(value);
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
 
 export async function selectDropdownItemAndCollect(
   ctx: CommandContext,
@@ -104,21 +120,113 @@ export async function tryFallbackDropdownSelection(
   const fallbackY = dropdownConfig.firstItemY +
     (positionInView * dropdownConfig.itemHeight) +
     Math.round(dropdownConfig.itemHeight / 2);
-  const touchValidatedTarget = resolveTouchValidatedDropdownClickY(
-    reopenCollector.getAll(),
-    positionInView,
+  const targetLabel = resolvedView.labels.find(label => label.index === index) ?? null;
+  const rowTop = targetLabel?.top ?? (dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight));
+  const rowBottom = targetLabel?.bottom ?? (rowTop + dropdownConfig.itemHeight - 1);
+  const labelCenterX = targetLabel ? Math.round((targetLabel.left + targetLabel.right) / 2) : rowClickX;
+  const xCandidates = uniqInts([
     rowClickX,
+    labelCenterX,
+    rowClickX - 36,
+    rowClickX + 36,
+  ]).filter(x => x >= 80 && x <= 510);
+  const yCandidates = uniqInts([
     fallbackY,
-  );
-  const selection = await selectDropdownItemAndCollect(
-    ctx,
-    lightId,
-    rowClickX,
-    touchValidatedTarget.y,
-    'press-fallback',
-  );
+    Math.round((rowTop + rowBottom) / 2),
+    rowTop + 5,
+    rowBottom - 5,
+  ]).filter(y => y >= rowTop && y <= rowBottom);
+  const maxSweepAttempts = Math.min(6, Math.max(1, xCandidates.length * yCandidates.length));
+  let attemptCount = 0;
+  let latestSelection: DropdownSelectionResult | null = null;
 
-  return { selection };
+  for (const candidateY of yCandidates) {
+    for (const candidateX of xCandidates) {
+      attemptCount++;
+      if (attemptCount > maxSweepAttempts) break;
+
+      let selectionView: DropdownView | null = resolvedView;
+      let selectionSeedCommands = reopenCollector.getAll();
+      if (attemptCount > 1) {
+        const iterationCollector = new PaintCollector();
+        const { view: reopenedView } = await reopenDropdownFromClosed(
+          ctx,
+          iterationCollector,
+          `select-fallback:${lightId}:${attemptCount}`,
+        );
+        collector.add(iterationCollector.getAll());
+        selectionView = reopenedView ?? null;
+        selectionSeedCommands = iterationCollector.getAll();
+      }
+
+      const requireFreshReady = attemptCount > 1;
+      const needsReadyWait =
+        !selectionView ||
+        !isViewReadyForClick(selectionView, index) ||
+        requireFreshReady;
+
+      if (needsReadyWait) {
+        const settled = await waitForDropdownReady(ctx, {
+          seedCommands: selectionSeedCommands,
+          reason: `select-fallback:${lightId}:${attemptCount}`,
+          timeoutMs: 2500,
+          readyForClickIndex: index,
+          requireFreshLabels: true,
+        });
+        collector.add(settled.commands);
+        selectionSeedCommands = [...selectionSeedCommands, ...settled.commands];
+        if (settled.closedDetected && !settled.view) {
+          logger.warn({ lightId, index, attempt: attemptCount }, 'Fallback attempt aborted: dropdown closed while waiting for fresh ready view');
+          continue;
+        }
+        selectionView = settled.view ?? selectionView;
+      }
+
+      if (!selectionView || !isViewReadyForClick(selectionView, index)) continue;
+      ctx.state.applyDropdownView(selectionView);
+      const selectionPositionInView = index - selectionView.firstVisible;
+      if (selectionPositionInView < 0 || selectionPositionInView >= dropdownConfig.visibleItems) continue;
+      const selectionLabel = selectionView.labels.find(label => label.index === index) ?? null;
+      const selectionRowTop = selectionLabel?.top ?? (dropdownConfig.firstItemY + (selectionPositionInView * dropdownConfig.itemHeight));
+      const selectionRowBottom = selectionLabel?.bottom ?? (selectionRowTop + dropdownConfig.itemHeight - 1);
+      const clampedCandidateY = Math.max(selectionRowTop + 1, Math.min(selectionRowBottom - 1, candidateY));
+
+      const touchValidatedTarget = resolveTouchValidatedDropdownClickY(
+        selectionSeedCommands,
+        selectionPositionInView,
+        candidateX,
+        clampedCandidateY,
+      );
+      const selection = await selectDropdownItemAndCollect(
+        ctx,
+        lightId,
+        candidateX,
+        touchValidatedTarget.y,
+        'press-fallback',
+      );
+      latestSelection = selection;
+
+      logger.info({
+        lightId,
+        index,
+        attempt: attemptCount,
+        candidateX,
+        candidateY: clampedCandidateY,
+        resolvedY: touchValidatedTarget.y,
+        headerLabel: selection.headerLabel,
+      }, 'Fallback selection sweep attempt');
+
+      if (isExpectedDropdownHeader(index, selection.headerLabel)) {
+        return { selection };
+      }
+      if (selection.headerLabel !== null) {
+        opportunisticallyCacheStatus(selection.commands, selection.headerLabel, ctx.state);
+      }
+    }
+    if (attemptCount > maxSweepAttempts) break;
+  }
+
+  return latestSelection ? { selection: latestSelection } : null;
 }
 
 export function opportunisticallyCacheStatus(

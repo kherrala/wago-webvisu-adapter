@@ -16,6 +16,7 @@ export async function scrollToTarget(
   index: number,
   initialView: DropdownView | null,
   initialViewCommands: PaintCommand[],
+  preferredTargetRow?: number,
 ): Promise<{
   latestView: DropdownView | null;
   latestViewCommands: PaintCommand[];
@@ -24,12 +25,12 @@ export async function scrollToTarget(
   const arrowY = uiCoordinates.lightSwitches.dropdownArrow.y;
   const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
   const scrollbarX = scrollbarConfig.x;
-  const targetFirstVisible = ctx.state.getTargetFirstVisible(index);
+  const targetFirstVisible = ctx.state.getTargetFirstVisible(index, preferredTargetRow);
   const ARROW_THRESHOLD = 5;
   const dragStartHoldMs = config.protocol?.dragStartHoldMs ?? 60;
   const dragStepDelayMs = Math.max(0, config.protocol?.dragStepDelayMs ?? 45);
   const dragEndHoldMs = Math.max(0, config.protocol?.dragEndHoldMs ?? 50);
-  const maxScrollAttempts = 6;
+  const maxScrollAttempts = 8;
 
   let latestView = initialView;
   let latestViewCommands = [...initialViewCommands];
@@ -214,7 +215,38 @@ export async function scrollToTarget(
     }
 
     if (!viewAfterReopen) {
-      throw new Error(`Drag reopen produced no stable view: light=${lightId}, index=${index}, target=${targetFirstVisible}, scrollAttempt=${scrollAttempt}`);
+      const recoveryCollector = new PaintCollector();
+      const { view: recoveryView } = await reopenDropdownFromClosed(
+        ctx,
+        recoveryCollector,
+        `drag-reopen-recovery:${scrollAttempt}`,
+      );
+      collector.add(recoveryCollector.getAll());
+      let recoveredView = recoveryView;
+      let recoverySourceCommands = recoveryCollector.getAll();
+      if (!recoveredView) {
+        const recoverySettled = await waitForDropdownReady(ctx, {
+          seedCommands: recoveryCollector.getAll(),
+          reason: `drag-reopen-recovery:${scrollAttempt}`,
+          timeoutMs: 2500,
+        });
+        collector.add(recoverySettled.commands);
+        recoveredView = recoverySettled.view;
+        recoverySourceCommands = [...recoveryCollector.getAll(), ...recoverySettled.commands];
+      }
+
+      if (!recoveredView) {
+        logger.warn({
+          lightId,
+          index,
+          scrollAttempt,
+          targetFirstVisible,
+        }, 'Drag reopen produced no stable view; continuing to next scroll attempt');
+        continue;
+      }
+
+      viewAfterReopen = recoveredView;
+      viewSourceCommands = recoverySourceCommands;
     }
     ctx.state.applyDropdownView(viewAfterReopen);
     latestView = viewAfterReopen;

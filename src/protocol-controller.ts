@@ -235,7 +235,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        return await this.doSelectLightSwitchOnce(lightId, index);
+        return await this.doSelectLightSwitchOnce(lightId, index, attempt);
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         let triggeredReconnect = false;
@@ -263,6 +263,17 @@ export class ProtocolController implements IWebVisuController, CommandContext {
         } else {
           mismatchStreak = 0;
           previousMismatchKey = null;
+          const message = lastError.message ?? '';
+          const recoverableSelectionError =
+            message.includes('Scroll failed after') ||
+            message.includes('Dropdown failed to open') ||
+            message.includes('Dropdown failed to reach closed state') ||
+            message.includes('Drag reopen produced no stable view') ||
+            message.includes('Dropdown not ready for item click');
+          if (recoverableSelectionError && attempt < maxAttempts) {
+            await this.doReconnect(`selection-transient-failure:${lightId}:${attempt}`);
+            triggeredReconnect = true;
+          }
         }
 
         logger.warn({ err: lastError, lightId, attempt, maxAttempts, triggeredReconnect }, 'Selection attempt failed, retrying');
@@ -273,7 +284,11 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     throw lastError!;
   }
 
-  private async doSelectLightSwitchOnce(lightId: string, index: number): Promise<{ allCommands: PaintCommand[]; postSelectionCommands: PaintCommand[] }> {
+  private async doSelectLightSwitchOnce(
+    lightId: string,
+    index: number,
+    attemptNumber: number,
+  ): Promise<{ allCommands: PaintCommand[]; postSelectionCommands: PaintCommand[] }> {
     logger.info(`Selecting light switch: ${lightId} (index: ${index})`);
 
     const dropdownConfig = uiCoordinates.lightSwitches.dropdownList;
@@ -286,6 +301,9 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     const openCollector = new PaintCollector();
     const opened = await openDropdown(this, openCollector, lightId);
 
+    const preferredRowCycle = [2, 4, 1, 3, 0];
+    const preferredTargetRow = preferredRowCycle[(Math.max(1, attemptNumber) - 1) % preferredRowCycle.length];
+
     // Step 3: Scroll to target
     const scrollCollector = new PaintCollector();
     const { latestView, latestViewCommands } = await scrollToTarget(
@@ -295,6 +313,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       index,
       opened.view,
       openCollector.getAll(),
+      preferredTargetRow,
     );
 
     // Step 4: Wait for view ready before click
@@ -337,13 +356,13 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     if (positionInView < 0 || positionInView >= visibleItems) {
       throw new Error(`Dropdown row out of view after scroll: light=${lightId}, position=${positionInView}`);
     }
-    const rowClickX = dropdownConfig.itemX;
-
+    let rowClickX = dropdownConfig.itemX;
     let itemY: number;
     let clickSource: string;
 
     const targetLabel = readyView.labels.find(l => l.index === index) ?? null;
     if (targetLabel) {
+      rowClickX = Math.max(80, Math.min(510, targetLabel.left + 24));
       itemY = Math.round((targetLabel.top + targetLabel.bottom) / 2);
       clickSource = 'view-label-center';
     } else {
@@ -364,7 +383,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
     logger.info({
       lightId, index, positionInView,
-      clickY: itemY, clickSource,
+      clickX: rowClickX, clickY: itemY, clickSource,
       touchRectanglesUsed: touchValidatedTarget.usedTouchRectangles,
       touchRectanglesInRow: touchValidatedTarget.targetRowRectCount,
       touchRectanglesTotalRows: touchValidatedTarget.totalRowRectCount,
