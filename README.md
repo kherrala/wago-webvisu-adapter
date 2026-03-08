@@ -33,12 +33,6 @@ Two containers:
 - **wago-webvisu-adapter**: Node.js app with Express API, protocol controller, SQLite status cache, and background polling service
 - **mcp-server**: Lightweight Python MCP server that proxies requests to the HTTP API
 
-### Controller modes
-
-| Mode | Default | Description |
-|------|---------|-------------|
-| `protocol` | ✓ | Speaks CoDeSys binary protocol directly. Lightweight, no browser. |
-| `playwright` | | Automates a headless Chromium browser. Useful for calibration. |
 
 ## Prerequisites
 
@@ -70,7 +64,7 @@ curl http://localhost:8080/api/lights
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CONTROLLER` | `protocol` | Controller backend: `protocol` or `playwright` |
+| `CONTROLLER` | `protocol` | Controller backend (`protocol` is the only supported value) |
 | `PORT` | `8080` | HTTP API server port |
 | `MCP_PORT` | `3002` | MCP SSE server port |
 | `DB_PATH` | `./data/lights.db` | SQLite database path |
@@ -80,7 +74,6 @@ curl http://localhost:8080/api/lights
 | `PROTOCOL_HOST` | `192.168.1.10` | PLC hostname |
 | `PROTOCOL_PORT` | `443` | PLC HTTPS port |
 | `PROTOCOL_TIMEOUT` | `5000` | Per-request timeout (ms) |
-| `HEADLESS` | `true` | Headless browser (Playwright mode only) |
 | `PROTOCOL_DEBUG_HTTP` | `false` | Verbose protocol HTTP frame logs |
 | `PROTOCOL_SESSION_TRACE` | `false` | Write per-session protocol frames to trace files |
 | `PROTOCOL_SESSION_TRACE_DIR` | `/data/protocol-trace` | Directory for session trace files |
@@ -247,19 +240,10 @@ npm install
 npm run build
 ```
 
-For Playwright mode only:
-```bash
-npx playwright install chromium
-```
-
 ### Running Locally
 
 ```bash
-# Protocol mode (default)
 npm run dev
-
-# Playwright mode with visible browser
-CONTROLLER=playwright HEADLESS=false npm run dev
 
 # Production
 npm start
@@ -281,7 +265,6 @@ wago-webvisu-adapter/
 │   ├── config.ts                # Light catalog, switch catalog, UI coordinates
 │   ├── controller-interface.ts  # Shared IWebVisuController interface
 │   ├── protocol-controller.ts   # CoDeSys binary protocol controller (default)
-│   ├── webvisu-controller.ts    # Playwright browser controller (fallback)
 │   ├── api.ts                   # Express HTTP API
 │   ├── polling-service.ts       # Background light status poller
 │   ├── database.ts              # SQLite status cache
