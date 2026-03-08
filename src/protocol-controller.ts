@@ -219,7 +219,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       throw new Error(`Unknown light switch: ${lightId}. Valid IDs: ${Object.keys(lightSwitches).join(', ')}`);
     }
 
-    const maxAttempts = 5;
+    const maxAttempts = 2;
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -260,6 +260,14 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     // Clear command window to avoid stale labels from previous operations
     this.window.clear();
 
+    // If target requires large backward scroll, reconnect to reset dropdown to position 0
+    const targetFirstVisible = this.state.getTargetFirstVisible(index);
+    const backwardDelta = this.state.dropdownFirstVisible - targetFirstVisible;
+    if (backwardDelta > 10) {
+      logger.info({ lightId, index, backwardDelta, currentFirstVisible: this.state.dropdownFirstVisible }, 'Large backward scroll needed; reconnecting to reset position');
+      await this.doReconnect(`backward-scroll-reset:${lightId}`);
+    }
+
     // Step 1: Ensure dropdown is closed
     await ensureDropdownClosed(this, `select-start:${lightId}`);
 
@@ -268,6 +276,12 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
     // Step 3: Scroll to target
     await scrollToTarget(this, lightId, index);
+
+    // Let PLC scroll position fully stabilize before clicking
+    await this.delay(500);
+
+    // Clear window after scroll — pre-click wait needs fresh position data
+    this.window.clear();
 
     // Step 4: Wait for view ready before click
     const readyResult = await waitForDropdownReady(this, {
@@ -333,6 +347,11 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     logger.info({
       lightId, index, positionInView,
       clickX: rowClickX, clickY: itemY, clickSource,
+      readyViewFirstVisible: readyView.firstVisible,
+      readyViewLabels: readyView.labels.map(l => ({ text: l.text, index: l.index, row: l.row, top: l.top, bottom: l.bottom })),
+      targetLabelText: targetLabel?.text,
+      targetLabelTop: targetLabel?.top,
+      targetLabelBottom: targetLabel?.bottom,
     }, 'Selecting dropdown item');
 
     // Step 6: Selection gesture
