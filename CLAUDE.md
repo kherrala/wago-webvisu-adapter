@@ -41,6 +41,10 @@ Both controllers implement `IWebVisuController` (`controller-interface.ts`):
 | `protocol/binary.ts` | MBUI, TLV, Frame binary primitives |
 | `protocol/messages.ts` | Request builders and response parsers |
 | `protocol/paint-commands.ts` | Paint command parser, status color extraction |
+| `protocol/command-ids.ts` | CMD_* constants (single source of truth for command IDs) |
+| `protocol/command-registry.ts` | All 107 paint command names for logging |
+| `renderer/debug-renderer.ts` | Multi-layer pixel renderer: applies paint commands, composites layers, encodes PNG |
+| `renderer/pixel-surface.ts` | RGBA pixel buffer with drawing primitives (fill, stroke, blit, clip) |
 | `config.ts` | UI coordinates, light definitions (56 switches), timing, scroll params |
 | `api.ts` | Express REST API |
 | `database.ts` | SQLite with WAL mode |
@@ -73,14 +77,53 @@ The protocol implementation was reverse-engineered from the CoDeSys WebVisu Java
 
 ### Paint Command System
 
-Commands form a layered rendering architecture:
-- **Drawing**: DrawPrimitive, DrawPolygon, DrawText, Fill3DRect, DrawImage, DrawArc
-- **State**: SetFillColor, SetPenStyle, SetFont, SetDrawMode, SetCornerRadius, SetStrokeStyle
-- **Clipping**: SetClipRect/RestoreClipRect, ClearRect, ClearRectAndClip
-- **Offscreen rendering**: AllocateDoubleBuffer → draw commands → CommitDoubleBuffer (IDs 54-57)
-- **UI composition**: CreateUIElement, UpdateContainerLayout, SelectLayer, SetTransformMatrix (IDs 74-92)
-- **Dialogs**: OpenModalDialog, CloseDialog, SwitchMainView (IDs 88-91)
-- **Text measurement**: PLC asks browser to measure text widths/breaks, browser sends results back as events 518/519
+107 paint command types identified (see `PAINT-COMMANDS.md`). Our renderer implements ~30 of these:
+- **Drawing**: DrawPrimitive (rect/ellipse/line, int/float variants), DrawPolygon (int16/float, fill/stroke/bezier), DrawText (latin1/UTF-16, legacy/new), Fill3DRect, DrawImage (with PLC image fetch + chroma key), DrawPixels
+- **State**: SetFillColor, SetPenStyle, SetFont, SetAreaStyle, SetCornerRadius, SetCursorStyle, SetRenderParameter, SetCompositeMode
+- **Clipping**: SetClipRect (push stack), RestoreClipRect (pop stack), ClearRect, ClearRectAndClip, ClearFullContext
+- **Layers**: SelectLayer (ID 18/81) — switches active drawing surface (see Renderer section below)
+- **Metadata**: InitVisualization, TouchHandlingFlags, TouchRectangles (parsed but no visual effect)
+
+Unimplemented categories (not needed for light switch control): double-buffer/offscreen (IDs 54-57), UI element lifecycle (IDs 74-78), dialogs (IDs 88-91), text measurement (IDs 32-35, 50-53), transforms (ID 83), animations (IDs 90, 104), file transfer (IDs 67-69).
+
+### Debug Renderer (Graphics Engine)
+
+`src/renderer/` — Server-side pixel renderer that replays PLC paint commands into PNG frames. Used for acceptance test snapshots, status detection, and visual debugging.
+
+**Architecture:**
+```
+PaintCommand[] → applyCommands() → PixelSurface(s) → renderCurrentSurface() → PNG
+                     ↓                                        ↓
+              state parsers (fill, pen, font, clip)    layer compositing
+              shape parsers (primitive, polygon, 3D)   event stripe overlay
+              text renderer (SVG via Resvg)            coordinate marker
+              image loader (HTTPS fetch + decode)
+```
+
+**Multi-layer system** (matches CoDeSys reference):
+- Base surface: opaque white background (layer ID -1)
+- Layer surfaces: transparent background (alpha=0), created on demand
+- `SelectLayer` (cmd 18/81) switches active drawing target by layer ID
+- Compositing: base → highest layer ID → ... → layer 0 on top (foreground)
+- ClearRect/ClearAll: white on base, transparent on layers
+- PLC typically uses layer 1 (background fills) and layer 0 (UI content)
+
+**Key files:**
+
+| File | Purpose |
+|------|---------|
+| `renderer/debug-renderer.ts` | Main orchestrator: `applyCommands()`, layer management, frame persistence |
+| `renderer/pixel-surface.ts` | RGBA pixel buffer: fillRect, strokeRect, drawLine, fillPolygon, fillEllipse, blitRgbaImage, clip support |
+| `renderer/state-parsers.ts` | Parsers for SetFillColor, SetPenStyle, SetFont, SetAreaStyle, SetClipRect, SetCornerRadius, SelectLayer |
+| `renderer/shape-commands.ts` | Parsers for DrawPrimitive (kinds 0-4), Fill3DRect, DrawPolygon, DrawPixels |
+| `renderer/text-commands.ts` | TextRenderer: parses DrawText commands, renders via SVG/Resvg into pixel surface |
+| `renderer/image-commands.ts` | ImageLoader: HTTPS image fetch from PLC, PNG/JPEG decode, SVG render, chroma key |
+| `renderer/geometry.ts` | Rect parsing, clip rect intersection, coordinate normalization |
+| `renderer/png-encoder.ts` | Raw RGBA → PNG encoding (zlib deflate, CRC32) |
+
+**Two usage modes:**
+1. **Disk mode**: `record(frame)` → writes PNG + JSON metadata + timeline to session directory
+2. **No-disk mode**: `renderPreview(commands)` → returns PNG buffer directly (used by protocol controller for acceptance tests)
 
 ## Critical Design Details
 

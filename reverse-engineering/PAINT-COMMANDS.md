@@ -1,6 +1,6 @@
 # CoDeSys WebVisu Paint Commands Reference
 
-Reverse-engineered from the CoDeSys WebVisu canvas renderer. See `webvisu-deobfuscated.js` for the reference implementation (all 107 command classes fully identified). Our adapter implements a subset in `src/protocol/paint-commands.ts` and `src/protocol/debug-renderer.ts`.
+Reverse-engineered from the CoDeSys WebVisu canvas renderer. See `webvisu-deobfuscated.js` for the reference implementation (all 107 command classes fully identified). Our adapter implements a subset in `src/protocol/paint-commands.ts` and `src/renderer/debug-renderer.ts`.
 
 ## Paint Command Stream Format
 
@@ -1240,7 +1240,7 @@ Offset  Size  Field
 
 ## Implementation Status Summary
 
-Commands implemented in `src/protocol/paint-commands.ts` and `src/protocol/debug-renderer.ts`:
+Commands implemented in `src/protocol/paint-commands.ts` and `src/renderer/debug-renderer.ts`:
 
 | ID | Name | Debug Renderer | Notes |
 |---:|------|:--------------:|-------|
@@ -1258,12 +1258,12 @@ Commands implemented in `src/protocol/paint-commands.ts` and `src/protocol/debug
 | 14,15 | DrawTooltip | No | Tooltip with styled box |
 | 16 | CloseTooltip | No | Tooltip removal |
 | 17 | ExecuteSystemAction | No | URL navigation / print |
-| 18 | SetDrawMode | Yes | Single canvas (no layers) |
+| 18 | SetDrawMode / SelectLayer | Yes | Multi-layer: switches active drawing surface by layer ID |
 | 19 | DrawImage | Yes | With PLC image fetch + tint |
 | 20 | ExecuteClientProgram | No | Unsupported in web |
 | 21,22 | OpenFileDialog | No | Unsupported in web |
 | 23 | Fill3DRect | Yes | 3D style approximated |
-| 24 | SetCursorStyle | No | CSS cursor on canvas |
+| 24 | SetCursorStyle | Yes | Parsed, no visual effect (headless) |
 | 30 | AreaGradientStyle | No | Not seen in captures |
 | 31 | DrawShapeAtPen | No | Shape at pen position |
 | 32 | ClearTextMeasureCache | No | Text layout helper |
@@ -1274,7 +1274,7 @@ Commands implemented in `src/protocol/paint-commands.ts` and `src/protocol/debug
 | 41 | InvalidateDisplay | No | Force redraw |
 | 42 | TouchHandlingFlags | Yes | No-op (metadata only) |
 | 43 | TouchRectangles | Yes | No-op (metadata only) |
-| 44 | DrawPixels | No | Not implemented |
+| 44 | DrawPixels | Yes | Individual pixel points |
 | 45 | DrawPrimitive (2pt) | Yes | |
 | 46 | DrawText (latin1) | Yes | |
 | 47 | DrawText (utf16) | Yes | UTF-16LE decode fallback |
@@ -1305,7 +1305,7 @@ Commands implemented in `src/protocol/paint-commands.ts` and `src/protocol/debug
 | 78 | ClearAndComposite | No | Flush + clear |
 | 79 | CreateMenuItem | No | Menu registration |
 | 80 | ConfigureDrawingContext | No | Canvas config |
-| 81 | SelectLayer | No | Layer activation |
+| 81 | SelectLayer | Yes | Multi-layer: same as ID 18 |
 | 82 | ResetLayerStack | No | Layer reset |
 | 83 | SetTransformMatrix | No | Affine transform |
 | 85 | SetStrokeStyle | No | Line style/color |
@@ -1455,7 +1455,7 @@ The paint command stream is stateful. The renderer maintains:
 | Pen width | 1 | SetPenStyle (5) |
 | Pen line style | solid | SetPenStyle (5) |
 | Font | Arial 12px | SetFont (6) |
-| Draw mode | 0 (fill+stroke) | SetDrawMode (18) |
+| Active layer | -1 (base surface) | SelectLayer (18/81) |
 | Clip rectangle | none (full canvas) | SetClipRect (8), RestoreClipRect (9), ClearRectAndClip (93) |
 | Clip stack | empty | SetClipRect (8) pushes, RestoreClipRect (9) pops |
 | Corner radius | (0, 0) | UpdateElement/SetCornerRadius (73) |
@@ -1464,3 +1464,26 @@ The paint command stream is stateful. The renderer maintains:
 | Render parameters | empty map | SetRenderParameter (66) |
 
 Commands are processed sequentially. State commands affect all subsequent drawing commands until the state is changed again.
+
+### Multi-Layer Rendering
+
+The renderer implements the CoDeSys layered canvas architecture:
+
+- **Base surface** (layer ID -1): opaque white background, receives drawing when no layer is active
+- **Layer surfaces** (layer ID 0..N): transparent background (alpha=0), created on demand by `SelectLayer`
+- **Layer 32767**: reserved for modal dialog overlay (not currently implemented)
+
+`SelectLayer` (command IDs 18 and 81) switches the active drawing target by setting `activeLayerId`. All subsequent drawing, clipping, and clearing commands operate on the active surface until the next `SelectLayer`.
+
+**Compositing order** for the final output:
+1. Start with the base surface (white background)
+2. Composite layers from highest ID to lowest (higher IDs = background, lower IDs = foreground)
+3. Layer 0 is composited last, appearing on top
+
+Layer surfaces use `blitRgbaImage` for compositing — transparent pixels (alpha=0) pass through, preserving content from layers below. This matches the browser implementation where each layer is a separate `<canvas>` element stacked via DOM/CSS z-order.
+
+**ClearRect/ClearAll behavior** depends on the active surface:
+- On base surface: clears to opaque white (#ffffff, alpha=255)
+- On layer surface: clears to transparent (alpha=0)
+
+The PLC typically uses two layers: layer 1 for background fills and layer 0 for UI content. The `activeLayerId` resets to -1 at the start of each frame's command processing.
