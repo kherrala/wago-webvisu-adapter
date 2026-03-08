@@ -24,7 +24,6 @@
     "jpeg-js": "^0.4.4",
     "pino": "^8.16.0",
     "pino-pretty": "^10.2.3",
-    "playwright": "^1.40.0",
     "pngjs": "^7.0.0"
   },
   "devDependencies": {

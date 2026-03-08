@@ -1,34 +1,8 @@
-import { PaintCommand } from '../protocol/paint-commands';
+import { classifyFrame, THRESHOLD_DROPDOWN_CLOSED, THRESHOLD_DROPDOWN_OPEN } from '../protocol/frame-classifier';
 import { CommandContext } from './command-context';
-import { DropdownView, resolveDropdownView, extractDropdownLabels, isViewReadyForClick, isViewInRange } from './dropdown-labels';
-import { isDropdownDefinitivelyClosed } from './dropdown-detection';
-
-export class CommandWindow {
-  private commands: PaintCommand[] = [];
-  constructor(private readonly maxSize: number = 240) {}
-
-  seed(commands: PaintCommand[]): void {
-    if (commands.length <= this.maxSize) {
-      this.commands = commands.slice();
-    } else {
-      this.commands = commands.slice(-this.maxSize);
-    }
-  }
-
-  append(commands: PaintCommand[]): void {
-    this.commands.push(...commands);
-    if (this.commands.length > this.maxSize) {
-      this.commands = this.commands.slice(-this.maxSize);
-    }
-  }
-
-  getCommands(): PaintCommand[] {
-    return this.commands;
-  }
-}
+import { DropdownView, resolveDropdownView, isViewReadyForClick, isViewInRange } from './dropdown-labels';
 
 export interface WaitForDropdownOptions {
-  seedCommands: PaintCommand[];
   reason: string;
   timeoutMs: number;
   /** View's firstVisible must be in this range */
@@ -39,16 +13,11 @@ export interface WaitForDropdownOptions {
   requireFreshLabels?: boolean;
 }
 
-const CLOSED_SIGNAL_STREAK = 2;
-
 export async function waitForDropdownReady(
   ctx: CommandContext,
   options: WaitForDropdownOptions,
-): Promise<{ view: DropdownView | null; commands: PaintCommand[]; closedDetected: boolean }> {
+): Promise<{ view: DropdownView | null; closedDetected: boolean }> {
   const { reason, timeoutMs, expectedRange, readyForClickIndex, requireFreshLabels } = options;
-  const window = new CommandWindow(240);
-  window.seed(options.seedCommands);
-  const additional: PaintCommand[] = [];
 
   const isReady = (v: DropdownView | null, hasFreshLabels: boolean): boolean => {
     if (!v) return false;
@@ -58,15 +27,16 @@ export async function waitForDropdownReady(
     return true;
   };
 
-  let view = resolveDropdownView(window.getCommands());
+  let view = resolveDropdownView(ctx.window.getCommands());
   if (expectedRange && !isViewInRange(view, expectedRange)) view = null;
+  if (requireFreshLabels) view = null;
 
   if (isReady(view, false) && !requireFreshLabels) {
-    return { view, commands: additional, closedDetected: false };
+    return { view, closedDetected: false };
   }
 
   if (timeoutMs <= 0) {
-    return { view: isReady(view, false) ? view : null, commands: additional, closedDetected: false };
+    return { view: isReady(view, false) ? view : null, closedDetected: false };
   }
 
   let closedDetected = false;
@@ -78,15 +48,18 @@ export async function waitForDropdownReady(
   while (Date.now() < deadline && !closedDetected) {
     poll++;
     const cmds = await ctx.pollPaintCommands(`dropdown-ready:${reason}:${poll}`);
-    additional.push(...cmds);
-    window.append(cmds);
 
-    const closedSignal = isDropdownDefinitivelyClosed(cmds);
-    closedStreak = closedSignal ? closedStreak + 1 : 0;
-    closedDetected = closedStreak >= CLOSED_SIGNAL_STREAK;
-
-    const candidate = resolveDropdownView(window.getCommands());
-    const freshLabels = extractDropdownLabels(cmds).length > 0;
+    const classification = classifyFrame(cmds);
+    const definitelyClosed =
+      classification.dropdownClosed >= THRESHOLD_DROPDOWN_CLOSED &&
+      classification.dropdownOpen < THRESHOLD_DROPDOWN_OPEN &&
+      classification.dropdownItems.length === 0;
+    closedStreak = definitelyClosed ? closedStreak + 1 : 0;
+    closedDetected = closedStreak >= 2;
+    const freshCandidate = resolveDropdownView(cmds);
+    const freshLabels = classification.dropdownItems.length > 0;
+    const accumulatedView = resolveDropdownView(ctx.window.getCommands());
+    const candidate = freshCandidate ?? accumulatedView;
 
     if (isReady(candidate, freshLabels)) {
       view = candidate;
@@ -94,7 +67,9 @@ export async function waitForDropdownReady(
     }
 
     if (candidate && (!expectedRange || isViewInRange(candidate, expectedRange))) {
-      view = candidate;
+      if (!requireFreshLabels || freshLabels) {
+        view = candidate;
+      }
     }
 
     if (closedDetected) break;
@@ -103,5 +78,5 @@ export async function waitForDropdownReady(
     if (remaining > 0) await ctx.delay(Math.min(150, remaining));
   }
 
-  return { view, commands: additional, closedDetected };
+  return { view, closedDetected };
 }

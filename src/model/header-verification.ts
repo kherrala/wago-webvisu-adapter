@@ -8,7 +8,6 @@ const logger = pino({ name: 'header-verification' });
 export type DropdownSelectionResult = {
   commands: PaintCommand[];
   headerLabel: string | null;
-  strategy: 'press-primary' | 'press-fallback';
 };
 
 export class DropdownHeaderMismatchError extends Error {

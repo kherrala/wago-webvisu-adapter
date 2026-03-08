@@ -32,6 +32,7 @@ import {
   parseFill3dRectCommand,
   parsePolygonCommand,
   parsePointsCommand,
+  parseDrawShapeAtPenCommand,
 } from './shape-commands';
 import { TextRenderer } from './text-commands';
 import {
@@ -58,6 +59,7 @@ import {
   CMD_DRAW_PRIMITIVE_FLOAT_QUAD,
   CMD_DRAW_PRIMITIVE_FLOAT_RECT,
   CMD_DRAW_SHAPE,
+  CMD_DRAW_SHAPE_AT_PEN,
   CMD_DRAW_TEXT,
   CMD_DRAW_TEXT_LEGACY,
   CMD_DRAW_TEXT_LEGACY_UTF16,
@@ -394,6 +396,8 @@ export class ProtocolDebugRenderer {
     const clipStack: SurfaceClipRect[] = [];
     let cornerRadiusX = -1;
     let cornerRadiusY = -1;
+    let penX = 0;
+    let penY = 0;
     let imageCount = 0;
     let processedImageCount = 0;
     let skippedImageCount = 0;
@@ -757,6 +761,34 @@ export class ProtocolDebugRenderer {
             currentPen.lineJoin,
           );
         }
+        continue;
+      }
+
+      if (command.id === CMD_DRAW_SHAPE_AT_PEN) {
+        const parsed = parseDrawShapeAtPenCommand(command);
+        if (!parsed) continue;
+        const shapeX = penX + parsed.advanceDx;
+        const shapeY = penY + parsed.advanceDy;
+        const surface = this.activeSurface();
+        const strokeColor = withVisibleAlpha(currentPen.color);
+        const fillColor = withVisibleAlpha(currentFill);
+        const shouldFill = !fillDisabled;
+
+        if (parsed.kind === 2) {
+          if (shouldFill) surface.fillEllipse(shapeX, shapeY, parsed.cellWidth, parsed.cellHeight, fillColor, clipRect ?? undefined);
+          if (currentPen.strokeEnabled) surface.strokeEllipse(shapeX, shapeY, parsed.cellWidth, parsed.cellHeight, strokeColor, currentPen.width, clipRect ?? undefined);
+        } else if (parsed.kind === 3) {
+          if (currentPen.strokeEnabled) surface.drawLine(shapeX, shapeY + parsed.cellHeight - 1, shapeX + parsed.cellWidth - 1, shapeY, strokeColor, currentPen.width, clipRect ?? undefined);
+        } else if (parsed.kind === 4) {
+          if (currentPen.strokeEnabled) surface.drawLine(shapeX, shapeY, shapeX + parsed.cellWidth - 1, shapeY + parsed.cellHeight - 1, strokeColor, currentPen.width, clipRect ?? undefined);
+        } else {
+          // kind 0 (rect) and 1 (rounded rect — rendered as rect)
+          if (shouldFill) surface.fillRect(shapeX, shapeY, parsed.cellWidth, parsed.cellHeight, fillColor, clipRect ?? undefined);
+          if (currentPen.strokeEnabled) surface.strokeRect(shapeX, shapeY, parsed.cellWidth, parsed.cellHeight, strokeColor, currentPen.width, clipRect ?? undefined);
+        }
+
+        if (parsed.advancePenX) penX += parsed.cellWidth;
+        if (parsed.advancePenY) penY += parsed.cellHeight;
         continue;
       }
 

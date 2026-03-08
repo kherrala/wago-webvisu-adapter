@@ -204,6 +204,7 @@ export class WebVisuProtocolClient {
   private lastMouseY: number = -1;
   private config: ProtocolConfig;
   private agent: https.Agent;
+  private agentCa?: Buffer;
   private sendShortPayloadInHeader: boolean = false;
   private cookies: Map<string, string> = new Map();
   private sessionTraceFilePath: string | null = null;
@@ -222,12 +223,26 @@ export class WebVisuProtocolClient {
         logger.warn({ error, path: this.config.tlsCaFile }, 'Failed to read TLS CA file');
       }
     }
-    this.agent = new https.Agent({
+    this.agentCa = ca;
+    this.agent = this.createHttpsAgent();
+  }
+
+  private createHttpsAgent(): https.Agent {
+    return new https.Agent({
       rejectUnauthorized: this.config.tlsRejectUnauthorized ?? false,
-      ca,
+      ca: this.agentCa,
       keepAlive: true,
       maxSockets: 1,
     });
+  }
+
+  private refreshHttpsAgent(): void {
+    try {
+      this.agent.destroy();
+    } catch {
+      // Ignore destroy failures in retry path.
+    }
+    this.agent = this.createHttpsAgent();
   }
 
   async connect(): Promise<void> {
@@ -1549,6 +1564,18 @@ export class WebVisuProtocolClient {
       normalized.includes('timed out');
   }
 
+  private isTransientTransportError(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return normalized.includes('socket hang up') ||
+      normalized.includes('econnreset') ||
+      normalized.includes('request timed out') ||
+      normalized.includes('etimedout') ||
+      normalized.includes('ehostunreach') ||
+      normalized.includes('enetunreach') ||
+      normalized.includes('econnaborted') ||
+      normalized.includes('epipe');
+  }
+
   private async measureRequestMs(data: ArrayBuffer, useHeaderPayload: boolean): Promise<number> {
     const start = Date.now();
     await this.sendRaw(data, {
@@ -1559,16 +1586,37 @@ export class WebVisuProtocolClient {
   }
 
   private async sendRaw(data: ArrayBuffer, options?: { useHeaderPayload?: boolean; allowEmptyResponse?: boolean }): Promise<ArrayBuffer> {
-    try {
-      return await this.sendRawOnce(data, options);
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : '';
-      if (msg.includes('socket hang up') || msg.includes('ECONNRESET')) {
-        logger.warn({ error: msg }, 'Connection dropped, retrying request once');
-        return this.sendRawOnce(data, options);
+    const requestBody = Buffer.from(data);
+    const requestMeta = this.decodeCommandMeta('request', requestBody);
+    const normalizedGroup = requestMeta.serviceGroup !== undefined
+      ? this.normalizeServiceGroup(requestMeta.serviceGroup)
+      : undefined;
+    const isGetPaintData = requestMeta.requestType === 2 && normalizedGroup === 4 && requestMeta.serviceId === 4;
+    const maxAttempts = isGetPaintData ? 3 : 2;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.sendRawOnce(data, options);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        const retriable = this.isTransientTransportError(message);
+        if (!retriable || attempt >= maxAttempts) {
+          throw error;
+        }
+        logger.warn({
+          attempt,
+          maxAttempts,
+          requestType: requestMeta.requestTypeName,
+          serviceName: requestMeta.serviceName,
+          error: message,
+        }, 'Transport error, retrying request');
+        // Drop keep-alive sockets after transport errors so the retry uses a fresh TLS session.
+        this.refreshHttpsAgent();
+        await this.delay(Math.min(120 * attempt, 400));
       }
-      throw error;
     }
+
+    throw new Error('Unreachable sendRaw retry state');
   }
 
   private sendRawOnce(data: ArrayBuffer, options?: { useHeaderPayload?: boolean; allowEmptyResponse?: boolean }): Promise<ArrayBuffer> {
@@ -1581,6 +1629,21 @@ export class WebVisuProtocolClient {
       const useHeaderPayload = options?.useHeaderPayload ??
         (this.sendShortPayloadInHeader && body.length < threshold);
       const allowEmptyResponse = options?.allowEmptyResponse ?? false;
+      const requestTimeoutMs = Math.max(1, this.config.requestTimeout);
+      let settled = false;
+      let hardTimeout: NodeJS.Timeout | null = null;
+      const finalizeResolve = (value: ArrayBuffer): void => {
+        if (settled) return;
+        settled = true;
+        if (hardTimeout) clearTimeout(hardTimeout);
+        resolve(value);
+      };
+      const finalizeReject = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        if (hardTimeout) clearTimeout(hardTimeout);
+        reject(error);
+      };
       this.logFrame('request', body, {
         host: this.config.host,
         port: this.config.port,
@@ -1611,7 +1674,7 @@ export class WebVisuProtocolClient {
         method: 'POST',
         headers,
         agent: this.agent,
-        timeout: this.config.requestTimeout,
+        timeout: requestTimeoutMs,
       }, (res) => {
         this.captureCookies(res.headers['set-cookie']);
         const chunks: Buffer[] = [];
@@ -1634,7 +1697,7 @@ export class WebVisuProtocolClient {
             const statusText = res.statusMessage ?? '';
             const len = responseBuf.byteLength;
             if (allowEmptyResponse && (!res.statusCode || res.statusCode < 400) && len === 0) {
-              resolve(new ArrayBuffer(0));
+              finalizeResolve(new ArrayBuffer(0));
               return;
             }
             if (this.config.debugHttp) {
@@ -1646,7 +1709,7 @@ export class WebVisuProtocolClient {
                 useHeaderPayload,
               }, 'Empty or error HTTP response');
             }
-            reject(new Error(`HTTP ${status} ${statusText} (response length ${len})`));
+            finalizeReject(new Error(`HTTP ${status} ${statusText} (response length ${len})`));
             return;
           }
           if (this.config.debugHttp) {
@@ -1664,9 +1727,11 @@ export class WebVisuProtocolClient {
             requestMeta,
             requestEvent,
           );
-          resolve(responseBuf.buffer.slice(responseBuf.byteOffset, responseBuf.byteOffset + responseBuf.byteLength));
+          finalizeResolve(responseBuf.buffer.slice(responseBuf.byteOffset, responseBuf.byteOffset + responseBuf.byteLength));
         });
-        res.on('error', reject);
+        res.on('error', (error) => {
+          finalizeReject(error instanceof Error ? error : new Error(String(error)));
+        });
       });
 
       if (this.config.debugHttp) {
@@ -1679,11 +1744,17 @@ export class WebVisuProtocolClient {
         }, 'HTTP request sent');
       }
 
-      req.on('error', reject);
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Request timed out'));
+      req.on('error', (error) => {
+        finalizeReject(error instanceof Error ? error : new Error(String(error)));
       });
+      req.on('timeout', () => {
+        req.destroy(new Error('Request timed out'));
+      });
+      // Guard the full request lifecycle (including connect/handshake stalls),
+      // not only socket inactivity after connect.
+      hardTimeout = setTimeout(() => {
+        req.destroy(new Error('Request timed out'));
+      }, requestTimeoutMs);
 
       if (!useHeaderPayload) {
         req.write(body);

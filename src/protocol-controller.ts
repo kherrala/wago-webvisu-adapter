@@ -17,23 +17,17 @@ import pino from 'pino';
 
 // Model & utilities
 import { UIState } from './model/ui-state';
-import { CommandContext } from './model/command-context';
-import { PaintCollector } from './model/paint-collector';
+import { CommandContext, CommandWindow } from './model/command-context';
 import { isViewReadyForClick } from './model/dropdown-labels';
-import { DropdownHeaderMismatchError, isExpectedDropdownHeader, verifyDropdownHeader } from './model/header-verification';
+import { DropdownHeaderMismatchError, verifyDropdownHeader } from './model/header-verification';
 import { resolveTouchValidatedDropdownClickY } from './model/touch-validation';
-import { normalizeVisuText } from './model/text-utils';
 import { waitForDropdownReady } from './model/wait-for-dropdown';
 
 // Commands
-import { ensureDropdownClosed, reopenDropdownFromClosed, forceDropdownResync } from './commands/ensure-dropdown-closed';
+import { ensureDropdownClosed, reopenDropdownFromClosed } from './commands/ensure-dropdown-closed';
 import { openDropdown } from './commands/open-dropdown';
 import { scrollToTarget } from './commands/scroll-to-target';
-import {
-  selectDropdownItemAndCollect,
-  tryFallbackDropdownSelection,
-  opportunisticallyCacheStatus,
-} from './commands/select-dropdown-item';
+import { selectDropdownItemAndCollect } from './commands/select-dropdown-item';
 import { resolveIndicatorImages, resolveLampStatus, formatImageSummary } from './commands/resolve-light-status';
 import { waitForInitialRenderReady, navigateToNapitTab, navigateToTab as doNavigateToTabCmd } from './commands/navigate-to-tab';
 
@@ -45,6 +39,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
   readonly client: WebVisuProtocolClient;
   readonly state: UIState;
+  readonly window: CommandWindow;
   debugRenderer: ProtocolDebugRenderer | null = null;
   readonly logger = logger;
 
@@ -54,6 +49,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
   constructor() {
     this.state = new UIState();
+    this.window = new CommandWindow(2000);
     const protocolHost = config.protocol?.host ?? '192.168.1.10';
     const protocolPort = config.protocol?.port ?? 443;
     const debugRenderEnabled = config.protocol?.debugRenderEnabled ?? false;
@@ -95,19 +91,15 @@ export class ProtocolController implements IWebVisuController, CommandContext {
         maxFrames: config.protocol?.debugRenderMaxFrames ?? 400,
         minIntervalMs: config.protocol?.debugRenderMinIntervalMs ?? 0,
         includeEmptyFrames: config.protocol?.debugRenderIncludeEmptyFrames ?? true,
-        ...(debugRenderEnabled
-          ? {
-            imageSource: {
-              enabled: config.protocol?.debugRenderFetchImages ?? true,
-              host: protocolHost,
-              port: protocolPort,
-              rejectUnauthorized: false,
-              referer: `https://${protocolHost}/webvisu/webvisu.htm`,
-              basePath: '/webvisu',
-              timeoutMs: config.protocol?.debugRenderImageFetchTimeoutMs ?? 1200,
-            },
-          }
-          : {}),
+        imageSource: {
+          enabled: config.protocol?.debugRenderFetchImages ?? true,
+          host: protocolHost,
+          port: protocolPort,
+          rejectUnauthorized: false,
+          referer: `https://${protocolHost}/webvisu/webvisu.htm`,
+          basePath: '/webvisu',
+          timeoutMs: config.protocol?.debugRenderImageFetchTimeoutMs ?? 1200,
+        },
       });
     } catch (error) {
       logger.warn({ error }, 'Failed to initialize protocol debug renderer; rendered-ui endpoint will return empty');
@@ -129,6 +121,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     );
 
     const { allCommands } = await this.client.sendEventAndCollect(request);
+    this.window.append(allCommands);
 
     if (allCommands.length === 0) {
       this.state.consecutiveEmptyRenders++;
@@ -168,12 +161,10 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     }
     await this.client.connect();
 
-    const initCollector = new PaintCollector();
-    await waitForInitialRenderReady(this, initCollector);
+    await waitForInitialRenderReady(this);
 
     logger.info('Navigating to Napit tab...');
-    const navCollector = new PaintCollector();
-    await navigateToNapitTab(this, navCollector);
+    await navigateToNapitTab(this);
 
     this.initialized = true;
     logger.info('Protocol controller initialized successfully');
@@ -191,6 +182,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     }
     this.initialized = false;
     this.state.resetAll();
+    this.window.clear();
     logger.info('Protocol controller closed');
   }
 
@@ -206,8 +198,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
   async navigateToTab(tabName: string): Promise<void> {
     return this.queueOperation(async () => {
       this.ensureInitialized();
-      const collector = new PaintCollector();
-      await doNavigateToTabCmd(this, collector, tabName);
+      await doNavigateToTabCmd(this, tabName);
     });
   }
 
@@ -222,62 +213,36 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     });
   }
 
-  private async doSelectLightSwitch(lightId: string): Promise<{ allCommands: PaintCommand[]; postSelectionCommands: PaintCommand[] }> {
+  private async doSelectLightSwitch(lightId: string): Promise<{ postSelectionCommands: PaintCommand[] }> {
     const index = lightSwitches[lightId];
     if (index === undefined) {
       throw new Error(`Unknown light switch: ${lightId}. Valid IDs: ${Object.keys(lightSwitches).join(', ')}`);
     }
 
-    const maxAttempts = config.protocol?.maxSelectionAttempts ?? 5;
+    const maxAttempts = 5;
     let lastError: Error | null = null;
-    let previousMismatchKey: string | null = null;
-    let mismatchStreak = 0;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        return await this.doSelectLightSwitchOnce(lightId, index, attempt);
+        return await this.doSelectLightSwitchOnce(lightId, index);
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        let triggeredReconnect = false;
-        if (lastError instanceof DropdownHeaderMismatchError) {
-          const currentMismatchKey = lastError.actualHeaderLabel
-            ? normalizeVisuText(lastError.actualHeaderLabel)
-            : '__missing-header__';
-          if (currentMismatchKey === previousMismatchKey) {
-            mismatchStreak++;
-          } else {
-            previousMismatchKey = currentMismatchKey;
-            mismatchStreak = 1;
-          }
+        const isHeaderMismatch = lastError instanceof DropdownHeaderMismatchError;
+        const message = lastError.message ?? '';
+        const isRecoverableError =
+          message.includes('Scroll failed after') ||
+          message.includes('Dropdown failed to open') ||
+          message.includes('Dropdown failed to close') ||
+          message.includes('Dropdown not ready for item click');
 
-          if (mismatchStreak >= 2 && attempt < maxAttempts) {
-            const resyncCollector = new PaintCollector();
-            await forceDropdownResync(this, resyncCollector, `header-mismatch-streak:${lightId}:${attempt}`);
-          }
-          if (mismatchStreak >= 3 && attempt < maxAttempts) {
-            await this.doReconnect(`selection-repeated-header-mismatch:${lightId}`);
-            triggeredReconnect = true;
-            mismatchStreak = 0;
-            previousMismatchKey = null;
-          }
-        } else {
-          mismatchStreak = 0;
-          previousMismatchKey = null;
-          const message = lastError.message ?? '';
-          const recoverableSelectionError =
-            message.includes('Scroll failed after') ||
-            message.includes('Dropdown failed to open') ||
-            message.includes('Dropdown failed to reach closed state') ||
-            message.includes('Drag reopen produced no stable view') ||
-            message.includes('Dropdown not ready for item click');
-          if (recoverableSelectionError && attempt < maxAttempts) {
-            await this.doReconnect(`selection-transient-failure:${lightId}:${attempt}`);
-            triggeredReconnect = true;
+        logger.warn({ err: lastError, lightId, attempt, maxAttempts }, 'Selection attempt failed');
+
+        if (attempt < maxAttempts && (isHeaderMismatch || isRecoverableError)) {
+          this.state.resetDropdown();
+          if (isRecoverableError) {
+            await this.doReconnect(`selection-failure:${lightId}:${attempt}`);
           }
         }
-
-        logger.warn({ err: lastError, lightId, attempt, maxAttempts, triggeredReconnect }, 'Selection attempt failed, retrying');
-        this.state.resetDropdown();
       }
     }
 
@@ -287,54 +252,38 @@ export class ProtocolController implements IWebVisuController, CommandContext {
   private async doSelectLightSwitchOnce(
     lightId: string,
     index: number,
-    attemptNumber: number,
-  ): Promise<{ allCommands: PaintCommand[]; postSelectionCommands: PaintCommand[] }> {
+  ): Promise<{ postSelectionCommands: PaintCommand[] }> {
     logger.info(`Selecting light switch: ${lightId} (index: ${index})`);
 
     const dropdownConfig = uiCoordinates.lightSwitches.dropdownList;
 
+    // Clear command window to avoid stale labels from previous operations
+    this.window.clear();
+
     // Step 1: Ensure dropdown is closed
-    const closeCollector = new PaintCollector();
-    await ensureDropdownClosed(this, closeCollector, `select-start:${lightId}`);
+    await ensureDropdownClosed(this, `select-start:${lightId}`);
 
     // Step 2: Open dropdown
-    const openCollector = new PaintCollector();
-    const opened = await openDropdown(this, openCollector, lightId);
-
-    const preferredRowCycle = [2, 4, 1, 3, 0];
-    const preferredTargetRow = preferredRowCycle[(Math.max(1, attemptNumber) - 1) % preferredRowCycle.length];
+    const opened = await openDropdown(this, lightId);
 
     // Step 3: Scroll to target
-    const scrollCollector = new PaintCollector();
-    const { latestView, latestViewCommands } = await scrollToTarget(
-      this,
-      scrollCollector,
-      lightId,
-      index,
-      opened.view,
-      openCollector.getAll(),
-      preferredTargetRow,
-    );
+    await scrollToTarget(this, lightId, index);
 
     // Step 4: Wait for view ready before click
     const readyResult = await waitForDropdownReady(this, {
-      seedCommands: latestViewCommands,
       reason: `pre-click:${lightId}`,
       timeoutMs: 2000,
       readyForClickIndex: index,
       requireFreshLabels: true,
     });
     let readyView = readyResult.view;
-    let clickSourceCommands = [...latestViewCommands, ...readyResult.commands];
 
     if (readyResult.closedDetected) {
-      logger.warn({ lightId, index }, 'Dropdown closed before item click; reopening once');
-      const reopenCollector = new PaintCollector();
-      const { view: reopenView } = await reopenDropdownFromClosed(this, reopenCollector, `pre-click-reopen:${lightId}`);
+      logger.warn({ lightId, index }, 'Dropdown closed before item click; reopening');
+      const { view: reopenView } = await reopenDropdownFromClosed(this, `pre-click-reopen:${lightId}`);
       let resolvedAfterReopen = reopenView;
       if (!isViewReadyForClick(resolvedAfterReopen, index)) {
         const settled = await waitForDropdownReady(this, {
-          seedCommands: reopenCollector.getAll(),
           reason: `pre-click-reopen:${lightId}`,
           timeoutMs: 2000,
           readyForClickIndex: index,
@@ -352,8 +301,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
     // Step 5: Resolve click coordinates
     const positionInView = index - this.state.dropdownFirstVisible;
-    const visibleItems = dropdownConfig.visibleItems;
-    if (positionInView < 0 || positionInView >= visibleItems) {
+    if (positionInView < 0 || positionInView >= dropdownConfig.visibleItems) {
       throw new Error(`Dropdown row out of view after scroll: light=${lightId}, position=${positionInView}`);
     }
     let rowClickX = dropdownConfig.itemX;
@@ -362,16 +310,17 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
     const targetLabel = readyView.labels.find(l => l.index === index) ?? null;
     if (targetLabel) {
-      rowClickX = Math.max(80, Math.min(510, targetLabel.left + 24));
+      rowClickX = Math.round((targetLabel.left + targetLabel.right) / 2);
       itemY = Math.round((targetLabel.top + targetLabel.bottom) / 2);
       clickSource = 'view-label-center';
     } else {
-      itemY = dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight) + Math.round(dropdownConfig.itemHeight / 3);
+      itemY = dropdownConfig.firstItemY + (positionInView * dropdownConfig.itemHeight) + Math.round(dropdownConfig.itemHeight / 2);
       clickSource = 'computed-row';
     }
+    rowClickX = Math.max(120, Math.min(510, rowClickX));
 
     const touchValidatedTarget = resolveTouchValidatedDropdownClickY(
-      clickSourceCommands,
+      this.window.getCommands(),
       positionInView,
       rowClickX,
       itemY,
@@ -384,41 +333,16 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     logger.info({
       lightId, index, positionInView,
       clickX: rowClickX, clickY: itemY, clickSource,
-      touchRectanglesUsed: touchValidatedTarget.usedTouchRectangles,
-      touchRectanglesInRow: touchValidatedTarget.targetRowRectCount,
-      touchRectanglesTotalRows: touchValidatedTarget.totalRowRectCount,
     }, 'Selecting dropdown item');
 
-    // Step 6: Selection gesture with fallback
-    let selectionResult = await selectDropdownItemAndCollect(this, lightId, rowClickX, itemY, 'press-primary');
-    let headerLabel = selectionResult.headerLabel;
-    if (!isExpectedDropdownHeader(index, headerLabel)) {
-      if (headerLabel !== null) {
-        opportunisticallyCacheStatus(selectionResult.commands, headerLabel, this.state);
-      }
-      const fallbackCollector = new PaintCollector();
-      const fallbackResult = await tryFallbackDropdownSelection(this, fallbackCollector, lightId, index, rowClickX);
-      if (fallbackResult) {
-        selectionResult = fallbackResult.selection;
-        headerLabel = fallbackResult.selection.headerLabel;
-        if (!isExpectedDropdownHeader(index, headerLabel) && headerLabel !== null) {
-          opportunisticallyCacheStatus(fallbackResult.selection.commands, headerLabel, this.state);
-        }
-      }
-    }
+    // Step 6: Selection gesture
+    const selectionResult = await selectDropdownItemAndCollect(this, lightId, index, rowClickX, itemY);
 
     // Step 7: Verify header
     verifyDropdownHeader(selectionResult.commands, lightId, index);
 
     logger.info(`Light switch ${lightId} selected`);
-    const allCommands = [
-      ...closeCollector.getAll(),
-      ...openCollector.getAll(),
-      ...scrollCollector.getAll(),
-      ...readyResult.commands,
-      ...selectionResult.commands,
-    ];
-    return { allCommands, postSelectionCommands: selectionResult.commands };
+    return { postSelectionCommands: selectionResult.commands };
   }
 
   // ---------------------------------------------------------------------------
@@ -431,8 +355,6 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       logger.info(`Toggling light: ${lightId} (function ${functionNumber})`);
 
       await this.doSelectLightSwitch(lightId);
-
-      const togglePostClickDelayMs = Math.max(0, config.protocol?.togglePostClickDelayMs ?? 500);
 
       const firstButton = uiCoordinates.lightSwitches.ohjausButton;
       const lightSwitchUi = uiCoordinates.lightSwitches as typeof uiCoordinates.lightSwitches & {
@@ -454,10 +376,6 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       }, 'Dispatching toggle button click');
 
       const clickCommands = await this.client.pressAndCollect(targetButton.x, targetButton.y);
-
-      if (togglePostClickDelayMs > 0) {
-        await this.delay(togglePostClickDelayMs);
-      }
 
       const postRenderPolls = Math.max(1, config.protocol?.togglePostRenderPolls ?? 2);
       const postRenderPollDelayMs = Math.max(0, config.protocol?.togglePostRenderPollDelayMs ?? 0);
@@ -497,10 +415,6 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       const switchName = lightSwitchNames[index] || lightId;
 
       const { postSelectionCommands } = await this.doSelectLightSwitch(lightId);
-      const selectionSettleDelayMs = config.protocol?.selectionSettleDelayMs ?? 200;
-      if (selectionSettleDelayMs > 0) {
-        await this.delay(selectionSettleDelayMs);
-      }
       const statusSettle = await this.client.waitForRenderSettled({
         reason: `status:${lightId}`,
         maxPolls: Math.max(1, config.protocol?.statusMaxAttempts ?? 3),
@@ -667,10 +581,8 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     this.state.lastReconnectAt = Date.now();
 
     await this.client.connect();
-    const initCollector = new PaintCollector();
-    await waitForInitialRenderReady(this, initCollector);
-    const navCollector = new PaintCollector();
-    await navigateToNapitTab(this, navCollector);
+    await waitForInitialRenderReady(this);
+    await navigateToNapitTab(this);
 
     logger.info({ reason }, 'Reconnected successfully');
   }

@@ -17,7 +17,6 @@ import { ProtocolController } from './protocol-controller';
 import { PaintCommand } from './protocol/paint-commands';
 import { uiCoordinates } from './config';
 import { buildViewportEvent } from './events';
-import { PaintCollector } from './model/paint-collector';
 
 const OUTPUT_PATH = path.join(process.cwd(), 'data', 'classifier-fixtures.json');
 

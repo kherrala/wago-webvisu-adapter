@@ -16,6 +16,7 @@ export const CMD_DRAW_IMAGE = 19;
 export const CMD_FILL_3D_RECT = 23;
 export const CMD_SET_CURSOR_STYLE = 24;
 export const CMD_SET_AREA_STYLE_LEGACY = 30;
+export const CMD_DRAW_SHAPE_AT_PEN = 31;
 export const CMD_INIT_VISUALIZATION = 37;
 export const CMD_TOUCH_HANDLING_FLAGS = 42;
 export const CMD_TOUCH_RECTANGLES = 43;

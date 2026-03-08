@@ -1,9 +1,9 @@
 import 'dotenv/config';
 import { app, setController } from './api';
-import { IWebVisuController } from './controller-interface';
 import { config } from './config';
 import { initDatabase, closeDatabase } from './database';
 import { startPolling, stopPolling, setPollingController } from './polling-service';
+import { ProtocolController } from './protocol-controller';
 import pino from 'pino';
 
 const logger = pino({
@@ -14,24 +14,10 @@ const logger = pino({
   },
 });
 
-const controllerType = process.env.CONTROLLER || 'protocol';
-
-async function createController(): Promise<IWebVisuController> {
-  if (controllerType === 'playwright') {
-    logger.info('Using Playwright browser controller');
-    const { webVisuController } = await import('./webvisu-controller');
-    return webVisuController;
-  } else {
-    logger.info('Using direct protocol controller');
-    const { ProtocolController } = await import('./protocol-controller');
-    return new ProtocolController();
-  }
-}
-
 async function main() {
-  logger.info(`Starting WAGO WebVisu Adapter (controller: ${controllerType})...`);
+  logger.info('Starting WAGO WebVisu Adapter...');
 
-  const controller = await createController();
+  const controller = new ProtocolController();
 
   // Handle graceful shutdown
   const shutdown = async (signal: string) => {

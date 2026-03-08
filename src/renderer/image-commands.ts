@@ -7,7 +7,6 @@ import {
   RgbaColor,
   DecodedRasterImage,
   ProtocolDebugRendererOptions,
-  withVisibleAlpha,
   mixColor,
   hashText,
 } from './types';
@@ -289,20 +288,6 @@ export function resolveImageStyle(
   tintColor: { r: number; g: number; b: number; a: number },
 ): { fill: RgbaColor | null; border: RgbaColor } {
   const normalizedId = imageId.toLowerCase().replace(/\x00+$/g, '').trim();
-  if (normalizedId.includes('element-lamp-lamp1-yellow-on')) {
-    const color = { r: 252, g: 220, b: 84, a: 255 };
-    return {
-      fill: { ...color, a: 210 },
-      border: mixColor(color, { r: 0, g: 0, b: 0, a: 255 }, 0.45),
-    };
-  }
-  if (normalizedId.includes('element-lamp-lamp1-yellow-off')) {
-    const color = { r: 120, g: 88, b: 42, a: 255 };
-    return {
-      fill: { ...color, a: 210 },
-      border: mixColor(color, { r: 0, g: 0, b: 0, a: 255 }, 0.45),
-    };
-  }
 
   // Flag 0x20 is a chroma key (transparency color), not a tint — don't use it as fill color.
   // Fall back to deterministic hash-based color for unresolved images.

@@ -1,30 +1,58 @@
 import { config, uiCoordinates } from '../config';
 import { PaintCommand, extractDrawImages, extractTextLabels } from '../protocol/paint-commands';
+import {
+  classifyFrame,
+  THRESHOLD_NAPIT_LOADED,
+  THRESHOLD_NAPIT_SCHEDULER_VIEW,
+} from '../protocol/frame-classifier';
 import { CommandContext } from '../model/command-context';
-import { PaintCollector } from '../model/paint-collector';
-import { isLampStatusImageId } from '../model/lamp-ids';
-import { normalizeVisuText } from '../model/text-utils';
 import pino from 'pino';
 
 const logger = pino({ name: 'navigate-to-tab' });
 
-const NAPIT_REQUIRED_LABELS = [
-  'ohjaus',
-  'tallenna asetukset',
-  'lue asetukset',
-  '1. painallus',
-  '2. painallus',
-];
-
 function isNapitTabLoaded(commands: PaintCommand[]): boolean {
-  const lampCount = extractDrawImages(commands)
-    .filter(img => isLampStatusImageId(img.imageId))
-    .length;
-  if (lampCount < 3) return false;
+  return classifyFrame(commands).napitTabLoaded >= THRESHOLD_NAPIT_LOADED;
+}
 
-  const labels = extractTextLabels(commands);
-  const normalizedTexts = new Set(labels.map(l => normalizeVisuText(l.text)));
-  return NAPIT_REQUIRED_LABELS.every(req => normalizedTexts.has(normalizeVisuText(req)));
+function isNapitSchedulerView(commands: PaintCommand[]): boolean {
+  return classifyFrame(commands).napitSchedulerView >= THRESHOLD_NAPIT_SCHEDULER_VIEW;
+}
+
+function hasNapitControlView(ctx: CommandContext, latestCommands?: PaintCommand[]): boolean {
+  if (latestCommands !== undefined) {
+    return latestCommands.length > 0 && isNapitTabLoaded(latestCommands);
+  }
+  return isNapitTabLoaded(ctx.window.getCommands());
+}
+
+function hasNapitSchedulerSubview(ctx: CommandContext, latestCommands?: PaintCommand[]): boolean {
+  if (latestCommands !== undefined) {
+    return latestCommands.length > 0 && isNapitSchedulerView(latestCommands);
+  }
+  return isNapitSchedulerView(ctx.window.getCommands());
+}
+
+async function recoverNapitControlFromScheduler(
+  ctx: CommandContext,
+  reason: string,
+): Promise<boolean> {
+  const esc = uiCoordinates.lightSwitches.keypadEscButton;
+  logger.warn({ reason, x: esc.x, y: esc.y }, 'Napit scheduler view detected; clicking ESC recovery point');
+
+  const clickCommands = await ctx.client.pressAndCollect(esc.x, esc.y);
+  ctx.window.append(clickCommands);
+  if (hasNapitControlView(ctx, clickCommands)) return true;
+
+  const deadline = Date.now() + 6000;
+  let poll = 0;
+  while (Date.now() < deadline) {
+    poll++;
+    const cmds = await ctx.pollPaintCommands(`napit-recover:${reason}:${poll}`);
+    if (hasNapitControlView(ctx, cmds)) return true;
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await ctx.delay(Math.min(160, remaining));
+  }
+  return false;
 }
 
 const MIN_INITIAL_RENDER_TIMEOUT_MS = 3500;
@@ -34,7 +62,6 @@ const DEFAULT_INITIAL_RENDER_POLL_INTERVAL_MS = 200;
 
 export async function waitForInitialRenderReady(
   ctx: CommandContext,
-  collector: PaintCollector,
 ): Promise<void> {
   const timeoutMs = Math.max(
     MIN_INITIAL_RENDER_TIMEOUT_MS,
@@ -46,16 +73,13 @@ export async function waitForInitialRenderReady(
   );
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  const accumulated: PaintCommand[] = [];
   let attempt = 0;
 
   while (Date.now() <= deadline) {
     attempt++;
-    const commands = await ctx.pollPaintCommands(`initial-render:${attempt}`);
-    accumulated.push(...commands);
-    collector.add(commands);
-    const images = extractDrawImages(accumulated);
-    const labels = extractTextLabels(accumulated);
+    await ctx.pollPaintCommands(`initial-render:${attempt}`);
+    const images = extractDrawImages(ctx.window.getCommands());
+    const labels = extractTextLabels(ctx.window.getCommands());
     const topLabels = labels.filter((label) => label.top <= 55 && label.bottom <= 75);
     logger.info({
       reason: 'initialize',
@@ -83,62 +107,70 @@ export async function waitForInitialRenderReady(
 
 export async function navigateToNapitTab(
   ctx: CommandContext,
-  collector: PaintCollector,
 ): Promise<void> {
   const coords = uiCoordinates.tabs.napit;
-  const timeoutMs = config.protocol?.initialRenderTimeoutMs ?? DEFAULT_INITIAL_RENDER_TIMEOUT_MS;
-  const maxAttempts = 3;
+  const timeoutMs = Math.max(
+    15000,
+    config.protocol?.initialRenderTimeoutMs ?? DEFAULT_INITIAL_RENDER_TIMEOUT_MS,
+  );
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    logger.info({ attempt }, `Clicking Napit tab at (${coords.x}, ${coords.y})`);
-    const accumulated: PaintCommand[] = [];
+  logger.info(`Clicking Napit tab at (${coords.x}, ${coords.y})`);
 
-    const clickCommands = await ctx.client.pressAndCollect(coords.x, coords.y);
-    accumulated.push(...clickCommands);
-    collector.add(clickCommands);
+  const clickCommands = await ctx.client.pressAndCollect(coords.x, coords.y);
+  ctx.window.append(clickCommands);
 
-    if (isNapitTabLoaded(accumulated)) {
-      logger.info({ attempt, commandCount: accumulated.length }, 'Napit tab loaded after click');
-      return;
-    }
-
-    const deadline = Date.now() + timeoutMs;
-    let poll = 0;
-    while (Date.now() < deadline) {
-      poll++;
-      const cmds = await ctx.pollPaintCommands(`napit-verify:${attempt}:${poll}`);
-      accumulated.push(...cmds);
-      collector.add(cmds);
-      if (isNapitTabLoaded(accumulated)) {
-        logger.info({ attempt, poll, commandCount: accumulated.length }, 'Napit tab loaded after polling');
-        return;
-      }
-      const remaining = deadline - Date.now();
-      if (remaining > 0) await ctx.delay(Math.min(200, remaining));
-    }
-
-    logger.warn({ attempt, commandCount: accumulated.length }, 'Napit tab not verified within timeout');
+  if (hasNapitControlView(ctx, clickCommands)) {
+    logger.info({ commandCount: clickCommands.length }, 'Napit tab loaded after click');
+    return;
   }
 
-  throw new Error(`Napit tab navigation failed after ${maxAttempts} attempts`);
+  let recoveries = 0;
+  const maxRecoveries = 2;
+  if (hasNapitSchedulerSubview(ctx, clickCommands) && recoveries < maxRecoveries) {
+    recoveries++;
+    if (await recoverNapitControlFromScheduler(ctx, 'after-click')) {
+      logger.info({ recoveries }, 'Napit control view recovered after scheduler detection');
+      return;
+    }
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  let poll = 0;
+  while (Date.now() < deadline) {
+    poll++;
+    const cmds = await ctx.pollPaintCommands(`napit-verify:${poll}`);
+    if (hasNapitControlView(ctx, cmds)) {
+      logger.info({ poll }, 'Napit tab loaded after polling');
+      return;
+    }
+    if (hasNapitSchedulerSubview(ctx, cmds) && recoveries < maxRecoveries) {
+      recoveries++;
+      if (await recoverNapitControlFromScheduler(ctx, `poll-${poll}`)) {
+        logger.info({ poll, recoveries }, 'Napit control view recovered after scheduler detection');
+        return;
+      }
+    }
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await ctx.delay(Math.min(200, remaining));
+  }
+
+  throw new Error('Napit tab navigation failed');
 }
 
 export async function navigateToTab(
   ctx: CommandContext,
-  collector: PaintCollector,
   tabName: string,
 ): Promise<void> {
   const coords = (uiCoordinates.tabs as Record<string, { x: number; y: number }>)[tabName];
   if (!coords) throw new Error(`Unknown tab: ${tabName}`);
 
   if (tabName === 'napit') {
-    await navigateToNapitTab(ctx, collector);
+    await navigateToNapitTab(ctx);
     return;
   }
 
   logger.info(`Navigating to tab: ${tabName} at (${coords.x}, ${coords.y})`);
   const clickCmds = await ctx.client.clickAndCollect(coords.x, coords.y);
-  collector.add(clickCmds);
-  const pollCmds = await ctx.pollPaintCommands(`navigate:${tabName}`);
-  collector.add(pollCmds);
+  ctx.window.append(clickCmds);
+  await ctx.pollPaintCommands(`navigate:${tabName}`);
 }

@@ -14,6 +14,7 @@ import {
   CMD_DRAW_SHAPE,
   CMD_DRAW_PRIMITIVE_FLOAT_QUAD,
   CMD_DRAW_PRIMITIVE_FLOAT_RECT,
+  CMD_DRAW_SHAPE_AT_PEN,
 } from '../protocol/command-ids';
 
 export function parsePrimitiveCommand(command: PaintCommand): {
@@ -138,6 +139,47 @@ export function parsePolygonCommand(command: PaintCommand): { mode: number; poin
     points.push({ x, y });
   }
   return { mode, points };
+}
+
+/**
+ * Parse DrawShapeAtPen (ID 31): draws a shape at the current pen position.
+ * Data layout (14 bytes, may have padding to 16):
+ *   offset 0: shapeType (uint16) — 0=rect, 1=rounded rect, 2=ellipse, 3=backslash, 4=forward slash
+ *   offset 2: cellWidth (uint16)
+ *   offset 4: cellHeight (uint16)
+ *   offset 6: advanceDx (uint16)
+ *   offset 8: advanceDy (uint16)
+ *   offset 10: flags (uint32) — bit 0=advance pen X, bit 1=advance pen Y, bit 2=use reference rect
+ */
+export function parseDrawShapeAtPenCommand(command: PaintCommand): {
+  kind: PrimitiveShapeKind;
+  cellWidth: number;
+  cellHeight: number;
+  advanceDx: number;
+  advanceDy: number;
+  advancePenX: boolean;
+  advancePenY: boolean;
+} | null {
+  if (command.id !== CMD_DRAW_SHAPE_AT_PEN || command.data.length < 14) {
+    return null;
+  }
+  const dv = new DataView(command.data.buffer, command.data.byteOffset, command.data.byteLength);
+  const kindRaw = dv.getUint16(0, true);
+  if (kindRaw > 4) return null;
+  const cellWidth = dv.getUint16(2, true);
+  const cellHeight = dv.getUint16(4, true);
+  const advanceDx = dv.getUint16(6, true);
+  const advanceDy = dv.getUint16(8, true);
+  const flags = dv.getUint32(10, true);
+  return {
+    kind: kindRaw as PrimitiveShapeKind,
+    cellWidth,
+    cellHeight,
+    advanceDx,
+    advanceDy,
+    advancePenX: (flags & 1) !== 0,
+    advancePenY: (flags & 2) !== 0,
+  };
 }
 
 export function parsePointsCommand(command: PaintCommand): SurfacePoint[] | null {

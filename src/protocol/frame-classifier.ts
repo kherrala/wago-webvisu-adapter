@@ -38,6 +38,7 @@ export interface FrameClassification {
   initialPageLoad: number;
   fullPageRender: number;
   napitTabLoaded: number;
+  napitSchedulerView: number;
   dropdownOpen: number;
   dropdownClosed: number;
   dropdownScrolled: number;
@@ -60,6 +61,12 @@ const NAPIT_NORMALIZED_LABELS = [
   '2.painallus',
 ];
 
+// Thresholds for detection predicates (used by dropdown-detection.ts, navigate-to-tab.ts)
+export const THRESHOLD_DROPDOWN_OPEN = 0.6;
+export const THRESHOLD_DROPDOWN_CLOSED = 0.6;
+export const THRESHOLD_NAPIT_LOADED = 0.8;
+export const THRESHOLD_NAPIT_SCHEDULER_VIEW = 0.9;
+
 // Command IDs allowed in minimal (clip-only) frames
 const MINIMAL_CMD_IDS = new Set([CMD_LAYER_SWITCH, CMD_SET_CLIP_RECT, CMD_RESTORE_CLIP_RECT]);
 
@@ -76,6 +83,7 @@ export function classifyFrame(
       initialPageLoad: 0,
       fullPageRender: 0,
       napitTabLoaded: 0,
+      napitSchedulerView: 0,
       dropdownOpen: 0,
       dropdownClosed: 0,
       dropdownScrolled: 0,
@@ -133,6 +141,7 @@ export function classifyFrame(
 
   // Check "ohjaus" presence
   const hasOhjaus = normalizedTexts.has('ohjaus');
+  const hasNapitTabLabel = normalizedTexts.has('napit');
 
   // --- Score each event ---
 
@@ -170,6 +179,47 @@ export function classifyFrame(
   if (lampCount >= 3) napitTabLoaded += 0.3;
   if (hasOhjaus) napitTabLoaded += 0.1;
   if (headerLabel !== null) napitTabLoaded += 0.1;
+  // Strong confidence when all napit cues are present in one frame.
+  if (
+    napitLabelMatches.length === NAPIT_NORMALIZED_LABELS.length &&
+    lampCount >= 3 &&
+    hasOhjaus &&
+    headerLabel !== null
+  ) {
+    napitTabLoaded = Math.max(napitTabLoaded, 0.95);
+  }
+
+  // napitSchedulerView
+  let napitSchedulerView = 0;
+  const schedulerCoreLabels = [
+    'periodtime-switching',
+    'holidayswitching',
+    'weeklytime-switching',
+  ];
+  const schedulerCoreMatches = schedulerCoreLabels.filter(req => normalizedTexts.has(req));
+  const dayLabels = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  const schedulerDayMatches = dayLabels.filter(req => normalizedTexts.has(req));
+  const hasSchedulerModeLabel =
+    normalizedTexts.has('manualoperation') ||
+    normalizedTexts.has('partymode') ||
+    normalizedTexts.has('defaultvalue');
+
+  if (hasNapitTabLabel) napitSchedulerView += 0.1;
+  if (schedulerCoreMatches.length >= 2) napitSchedulerView += 0.5;
+  if (schedulerCoreMatches.length === schedulerCoreLabels.length) napitSchedulerView += 0.2;
+  if (schedulerDayMatches.length >= 5) napitSchedulerView += 0.1;
+  if (hasSchedulerModeLabel) napitSchedulerView += 0.1;
+  if (textLabelCount >= 35) napitSchedulerView += 0.1;
+  // Strong confidence for the scheduler subview under Napit.
+  if (
+    hasNapitTabLabel &&
+    schedulerCoreMatches.length === schedulerCoreLabels.length &&
+    schedulerDayMatches.length === dayLabels.length &&
+    hasSchedulerModeLabel &&
+    textLabelCount >= 35
+  ) {
+    napitSchedulerView = Math.max(napitSchedulerView, 0.95);
+  }
 
   // dropdownOpen
   let dropdownOpen = 0;
@@ -178,12 +228,23 @@ export function classifyFrame(
   if (polygons.length >= 4) dropdownOpen += 0.2;
   if (cornerRadii.length >= 1) dropdownOpen += 0.1;
   if (textLabelCount >= 15 && textLabelCount <= 30) dropdownOpen += 0.1;
+  // Strong confidence: multiple distinct rows with enough row labels.
+  if (dropdownLabels.length >= 5 && distinctRows.size >= 4) {
+    dropdownOpen = Math.max(dropdownOpen, 0.95);
+  }
+  if (dropdownLabels.length >= 8 && distinctRows.size >= 5) {
+    dropdownOpen = Math.max(dropdownOpen, 1.0);
+  }
 
   // dropdownClosed
   let dropdownClosed = 0;
   if (hasOhjaus && dropdownLabels.length < 3) dropdownClosed += 0.6;
   if (hasOhjaus && polygons.length === 0) dropdownClosed += 0.2;
   if (hasOhjaus && dropdownLabels.length === 0) dropdownClosed += 0.2;
+  // Strong confidence: stable napit panel with header visible and no row labels.
+  if (hasOhjaus && headerLabel !== null && lampCount >= 3 && dropdownLabels.length <= 1) {
+    dropdownClosed = Math.max(dropdownClosed, 0.95);
+  }
   if (dropdownOpen >= 0.6) dropdownClosed = Math.min(dropdownClosed, 0.2);
 
   // dropdownScrolled (requires previous)
@@ -216,6 +277,7 @@ export function classifyFrame(
     initialPageLoad,
     fullPageRender: clamp(fullPageRender),
     napitTabLoaded: clamp(napitTabLoaded),
+    napitSchedulerView: clamp(napitSchedulerView),
     dropdownOpen: clamp(dropdownOpen),
     dropdownClosed: clamp(dropdownClosed),
     dropdownScrolled,

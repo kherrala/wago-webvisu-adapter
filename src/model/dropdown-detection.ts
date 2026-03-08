@@ -1,32 +1,17 @@
-import { PaintCommand, extractTextLabels } from '../protocol/paint-commands';
+import { PaintCommand } from '../protocol/paint-commands';
+import { classifyFrame, THRESHOLD_DROPDOWN_OPEN, THRESHOLD_DROPDOWN_CLOSED } from '../protocol/frame-classifier';
 import { UIState } from './ui-state';
-import { normalizeVisuText } from './text-utils';
-import { extractDropdownLabels, resolveDropdownView } from './dropdown-labels';
+import { resolveDropdownView } from './dropdown-labels';
 import pino from 'pino';
 
 const logger = pino({ name: 'dropdown-detection' });
 
 export function isDropdownOpen(commands: PaintCommand[]): boolean {
-  const labels = extractDropdownLabels(commands);
-  return labels.length >= 3;
-}
-
-export function isDropdownLikelyClosed(commands: PaintCommand[]): boolean {
-  const labels = extractTextLabels(commands);
-  return labels.some(l => normalizeVisuText(l.text) === 'ohjaus');
+  return classifyFrame(commands).dropdownOpen >= THRESHOLD_DROPDOWN_OPEN;
 }
 
 export function isDropdownDefinitivelyClosed(commands: PaintCommand[]): boolean {
-  return isDropdownLikelyClosed(commands) && !isDropdownOpen(commands);
-}
-
-export function didPressLeaveDropdownOpen(
-  downCommands: PaintCommand[],
-  settledCommands: PaintCommand[],
-): boolean {
-  if (isDropdownOpen(settledCommands)) return true;
-  if (isDropdownDefinitivelyClosed(settledCommands)) return false;
-  return isDropdownOpen(downCommands);
+  return classifyFrame(commands).dropdownClosed >= THRESHOLD_DROPDOWN_CLOSED;
 }
 
 export function syncDropdownStateFromCommands(

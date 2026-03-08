@@ -1,26 +1,8 @@
 export const config = {
-  webvisu: {
-    url: 'https://192.168.1.10/webvisu/webvisu.htm',
-    loadTimeout: 60000,
-    canvasRenderDelay: 2000, // Time for canvas to render after element exists
-
-    // Individual delays for each action type (in milliseconds)
-    delays: {
-      tabClick: 2000,           // After clicking a tab
-      dropdownOpen: 2000,       // After clicking dropdown arrow to open
-      dropdownScrollStart: 100, // After dragging scrollbar
-      dropdownScrollDrag: 300,  // After dragging scrollbar
-      dropdownScrollStop: 800,  // After dragging scrollbar
-      dropdownSelect: 400,      // After clicking an item to select
-      toggleButton: 0,          // After clicking Ohjaus button
-      statusRead: 0,            // Before reading status indicator
-    },
-  },
   server: {
     port: parseInt(process.env.PORT || '8080', 10),
   },
   browser: {
-    headless: process.env.HEADLESS !== 'false',
     viewport: { width: 1280, height: 1024 },
   },
   database: {
@@ -36,24 +18,10 @@ export const config = {
     requestTimeout: parseInt(process.env.PROTOCOL_TIMEOUT || '5000', 10),
     initialRenderTimeoutMs: parseInt(process.env.PROTOCOL_INITIAL_RENDER_TIMEOUT_MS || '7000', 10),
     initialRenderPollIntervalMs: parseInt(process.env.PROTOCOL_INITIAL_RENDER_POLL_INTERVAL_MS || '0', 10),
-    dropdownPreOpenDelayMs: parseInt(process.env.PROTOCOL_DROPDOWN_PRE_OPEN_DELAY_MS || '0', 10),
     dropdownOpenTimeoutMs: parseInt(process.env.PROTOCOL_DROPDOWN_OPEN_TIMEOUT_MS || '6000', 10),
-    dropdownOpenPollIntervalMs: parseInt(process.env.PROTOCOL_DROPDOWN_OPEN_POLL_INTERVAL_MS || '0', 10),
-    dropdownScrollTimeoutMs: parseInt(process.env.PROTOCOL_DROPDOWN_SCROLL_TIMEOUT_MS || '5000', 10),
-    dropdownScrollPollIntervalMs: parseInt(process.env.PROTOCOL_DROPDOWN_SCROLL_POLL_INTERVAL_MS || '0', 10),
-    dropdownItemClickYOffset: parseInt(process.env.PROTOCOL_DROPDOWN_ITEM_CLICK_Y_OFFSET || '2', 10),
-    scrollApproach: (process.env.PROTOCOL_SCROLL_APPROACH || 'arrow') as 'drag' | 'arrow',
-    scrollSettleDelayMs: parseInt(process.env.PROTOCOL_SCROLL_SETTLE_DELAY_MS || '0', 10),
     dragStartHoldMs: parseInt(process.env.PROTOCOL_DRAG_START_HOLD_MS || '60', 10),
     dragStepDelayMs: parseInt(process.env.PROTOCOL_DRAG_STEP_DELAY_MS || '45', 10),
     dragEndHoldMs: parseInt(process.env.PROTOCOL_DRAG_END_HOLD_MS || '50', 10),
-    selectionSettleDelayMs: parseInt(process.env.PROTOCOL_SELECTION_SETTLE_DELAY_MS || '200', 10),
-    selectionVerifyTimeoutMs: parseInt(process.env.PROTOCOL_SELECTION_VERIFY_TIMEOUT_MS || '0', 10),
-    selectionVerifyPollIntervalMs: parseInt(process.env.PROTOCOL_SELECTION_VERIFY_POLL_INTERVAL_MS || '0', 10),
-    maxSelectionAttempts: parseInt(process.env.PROTOCOL_MAX_SELECTION_ATTEMPTS || '5', 10),
-    togglePreClickDelayMs: parseInt(process.env.PROTOCOL_TOGGLE_PRE_CLICK_DELAY_MS || '0', 10),
-    togglePressHoldMs: parseInt(process.env.PROTOCOL_TOGGLE_PRESS_HOLD_MS || '140', 10),
-    togglePostClickDelayMs: parseInt(process.env.PROTOCOL_TOGGLE_POST_CLICK_DELAY_MS || '0', 10),
     togglePostRenderPolls: parseInt(process.env.PROTOCOL_TOGGLE_POST_RENDER_POLLS || '2', 10),
     togglePostRenderPollDelayMs: parseInt(process.env.PROTOCOL_TOGGLE_POST_RENDER_POLL_DELAY_MS || '0', 10),
     statusPollDelayMs: parseInt(process.env.PROTOCOL_STATUS_POLL_DELAY_MS || '0', 10),

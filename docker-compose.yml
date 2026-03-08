@@ -11,10 +11,6 @@ services:
     environment:
       # Server port
       - PORT=8080
-      # Controller mode: 'protocol' (default, no browser) or 'playwright' (browser automation)
-      - CONTROLLER=${CONTROLLER:-protocol}
-      # Browser settings (only used with CONTROLLER=playwright)
-      - HEADLESS=true
       # Database settings
       - DB_PATH=/data/lights.db
       # Polling settings
@@ -23,11 +19,6 @@ services:
       - POLL_CYCLE_DELAY_MS=30000
     volumes:
       - ./data:/data
-    # 2gb SHM for Playwright mode, 64mb is enough for protocol mode
-    shm_size: '${SHM_SIZE:-64m}'
-    # Security options for Chrome
-    security_opt:
-      - seccomp:unconfined
     # Network access to WAGO PLC
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -69,30 +60,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-# For development with visible browser (requires X11)
-# Uncomment and run with: docker-compose --profile dev up
-  wago-webvisu-adapter-dev:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: wago-webvisu-adapter-dev
-    profiles:
-      - dev
-    ports:
-      - "${PORT:-8080}:8080"
-    environment:
-      - PORT=8080
-      - HEADLESS=false
-      - DISPLAY=${DISPLAY:-:0}
-    volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix
-      - ./data:/data
-    shm_size: '2gb'
-    security_opt:
-      - seccomp:unconfined
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
 # Data directory ./data is bind-mounted to /data in the container.
 # Create it on the host if it doesn't exist: mkdir -p data

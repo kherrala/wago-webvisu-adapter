@@ -1,9 +1,7 @@
 import { config, uiCoordinates } from '../config';
-import { PaintCommand } from '../protocol/paint-commands';
 import { CommandContext } from '../model/command-context';
-import { PaintCollector } from '../model/paint-collector';
-import { DropdownView, resolveDropdownView, isViewInRange } from '../model/dropdown-labels';
-import { CommandWindow, waitForDropdownReady } from '../model/wait-for-dropdown';
+import { DropdownView, isViewInRange } from '../model/dropdown-labels';
+import { waitForDropdownReady } from '../model/wait-for-dropdown';
 import { reopenDropdownFromClosed } from './ensure-dropdown-closed';
 import pino from 'pino';
 
@@ -11,18 +9,10 @@ const logger = pino({ name: 'scroll-to-target' });
 
 export async function scrollToTarget(
   ctx: CommandContext,
-  collector: PaintCollector,
   lightId: string,
   index: number,
-  initialView: DropdownView | null,
-  initialViewCommands: PaintCommand[],
   preferredTargetRow?: number,
-): Promise<{
-  latestView: DropdownView | null;
-  latestViewCommands: PaintCommand[];
-}> {
-  const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
-  const arrowY = uiCoordinates.lightSwitches.dropdownArrow.y;
+): Promise<void> {
   const scrollbarConfig = uiCoordinates.lightSwitches.scrollbar;
   const scrollbarX = scrollbarConfig.x;
   const targetFirstVisible = ctx.state.getTargetFirstVisible(index, preferredTargetRow);
@@ -31,9 +21,6 @@ export async function scrollToTarget(
   const dragStepDelayMs = Math.max(0, config.protocol?.dragStepDelayMs ?? 45);
   const dragEndHoldMs = Math.max(0, config.protocol?.dragEndHoldMs ?? 50);
   const maxScrollAttempts = 8;
-
-  let latestView = initialView;
-  let latestViewCommands = [...initialViewCommands];
 
   for (let scrollAttempt = 0; scrollAttempt < maxScrollAttempts && !ctx.state.isDropdownIndexVisible(index); scrollAttempt++) {
     const delta = targetFirstVisible - ctx.state.dropdownFirstVisible;
@@ -46,7 +33,6 @@ export async function scrollToTarget(
       const arrowBtn = scrollDirection === 'down'
         ? scrollbarConfig.arrowDown
         : scrollbarConfig.arrowUp;
-      const arrowWindow = new CommandWindow(240);
 
       logger.info({
         lightId, index, scrollAttempt, delta, absDelta,
@@ -54,102 +40,54 @@ export async function scrollToTarget(
         arrowX: arrowBtn.x, arrowY: arrowBtn.y,
       }, 'Arrow-click scroll');
 
+      // Clear window for fresh arrow scroll detection
+      ctx.window.clear();
+
       for (let i = 0; i < absDelta; i++) {
         const clickCmds = await ctx.client.pressAndCollect(arrowBtn.x, arrowBtn.y);
-        arrowWindow.append(clickCmds);
-        collector.add(clickCmds);
-        const settleCmds = await ctx.pollPaintCommands(`arrow-step:${scrollAttempt}:${i}`);
-        arrowWindow.append(settleCmds);
-        collector.add(settleCmds);
-        if (i < absDelta - 1) await ctx.delay(120);
+        ctx.window.append(clickCmds);
+        await ctx.pollPaintCommands(`arrow-step:${scrollAttempt}:${i}`);
       }
 
-      await ctx.delay(120);
-      const arrowPollCmds = await ctx.pollPaintCommands(`arrow-scroll:${scrollAttempt}`);
-      arrowWindow.append(arrowPollCmds);
-      collector.add(arrowPollCmds);
+      await ctx.pollPaintCommands(`arrow-scroll:${scrollAttempt}`);
 
       const expectedRange = {
         min: Math.min(scrollStartFirstVisible, scrollStartFirstVisible + delta),
         max: Math.max(scrollStartFirstVisible, scrollStartFirstVisible + delta),
       };
 
-      let view = resolveDropdownView(arrowWindow.getCommands());
-      if (!isViewInRange(view, expectedRange)) view = null;
-      let viewSourceCommands = arrowWindow.getCommands();
+      const settled = await waitForDropdownReady(ctx, {
+        reason: `arrow-scroll:${scrollAttempt}`,
+        timeoutMs: 2000,
+        expectedRange,
+        requireFreshLabels: true,
+      });
+      let view = settled.view;
 
-      if (!view) {
-        const settled = await waitForDropdownReady(ctx, {
-          seedCommands: arrowWindow.getCommands(),
-          reason: `arrow-scroll:${scrollAttempt}`,
-          timeoutMs: 2000,
-          expectedRange,
-        });
-        collector.add(settled.commands);
-        arrowWindow.append(settled.commands);
-        view = settled.view;
-        let closedDetected = settled.closedDetected;
-        viewSourceCommands = arrowWindow.getCommands();
-
-        if (!view && closedDetected) {
-          logger.warn({ scrollAttempt, lightId, delta }, 'Dropdown closed during arrow scroll (Ohjaus detected); reopening');
-          const reopenCollector = new PaintCollector();
-          const { view: reopenView } = await reopenDropdownFromClosed(ctx, reopenCollector, `arrow-scroll-reopen:${scrollAttempt}`);
-          collector.add(reopenCollector.getAll());
-          view = reopenView;
-          if (!isViewInRange(view, expectedRange)) view = null;
-          viewSourceCommands = reopenCollector.getAll();
-          if (!view) {
-            const reopenSettled = await waitForDropdownReady(ctx, {
-              seedCommands: reopenCollector.getAll(),
-              reason: `arrow-scroll-reopen:${scrollAttempt}`,
-              timeoutMs: 2000,
-              expectedRange,
-            });
-            collector.add(reopenSettled.commands);
-            view = reopenSettled.view;
-            viewSourceCommands = [...reopenCollector.getAll(), ...reopenSettled.commands];
-          }
+      if (!view && settled.closedDetected) {
+        logger.warn({ scrollAttempt, lightId, delta }, 'Dropdown closed during arrow scroll; reopening');
+        ctx.window.clear();
+        const { view: reopenView } = await reopenDropdownFromClosed(ctx, `arrow-scroll-reopen:${scrollAttempt}`);
+        view = reopenView;
+        if (!isViewInRange(view, expectedRange)) view = null;
+        if (!view) {
+          const reopenSettled = await waitForDropdownReady(ctx, {
+            reason: `arrow-scroll-reopen:${scrollAttempt}`,
+            timeoutMs: 2000,
+            expectedRange,
+            requireFreshLabels: true,
+          });
+          view = reopenSettled.view;
         }
       }
 
       let arrowProgressed = false;
       if (view) {
         ctx.state.applyDropdownView(view);
-        latestView = view;
-        latestViewCommands = viewSourceCommands;
         arrowProgressed = view.firstVisible !== scrollStartFirstVisible;
         logger.info({ scrollAttempt, firstVisible: view.firstVisible }, 'Arrow-scroll view synced');
       }
       if (view && arrowProgressed) {
-        await ctx.delay(120);
-        const closeCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
-        collector.add(closeCmds);
-        await ctx.delay(220);
-
-        const resyncCollector = new PaintCollector();
-        const { view: reopenView } = await reopenDropdownFromClosed(ctx, resyncCollector, `arrow-resync:${scrollAttempt}`);
-        collector.add(resyncCollector.getAll());
-        let syncedView = reopenView;
-        let syncedSourceCommands = resyncCollector.getAll();
-        if (!syncedView) {
-          const settled = await waitForDropdownReady(ctx, {
-            seedCommands: resyncCollector.getAll(),
-            reason: `arrow-resync:${scrollAttempt}`,
-            timeoutMs: 2200,
-          });
-          collector.add(settled.commands);
-          syncedView = settled.view;
-          syncedSourceCommands = [...resyncCollector.getAll(), ...settled.commands];
-        }
-
-        if (!syncedView) {
-          throw new Error(`Arrow resync produced no stable view: light=${lightId}, index=${index}, target=${targetFirstVisible}, scrollAttempt=${scrollAttempt}`);
-        }
-
-        ctx.state.applyDropdownView(syncedView);
-        latestView = syncedView;
-        latestViewCommands = syncedSourceCommands;
         continue;
       }
       if (view && !arrowProgressed) {
@@ -162,106 +100,88 @@ export async function scrollToTarget(
     // Drag path
     const currentHandleY = Math.round(ctx.state.dropdownHandleCenterY);
     const targetHandleY = Math.round(ctx.state.getDropdownScrollY(targetFirstVisible));
+    const thumbTopY = scrollbarConfig.thumbRange.topY;
+    const thumbBottomY = scrollbarConfig.thumbRange.bottomY;
+    const minDragDistance = 18;
+    let effectiveTargetHandleY = targetHandleY;
+    const rawDragDistance = Math.abs(targetHandleY - currentHandleY);
+    if (rawDragDistance > 0 && rawDragDistance < minDragDistance) {
+      const direction = targetHandleY > currentHandleY ? 1 : -1;
+      effectiveTargetHandleY = Math.max(
+        thumbTopY,
+        Math.min(thumbBottomY, currentHandleY + (direction * minDragDistance))
+      );
+    }
 
     logger.info({
       lightId, index, scrollAttempt,
       currentFirstVisible: ctx.state.dropdownFirstVisible, targetFirstVisible,
-      delta, currentHandleY, targetHandleY,
+      delta, currentHandleY, targetHandleY, effectiveTargetHandleY,
     }, 'Dragging scrollbar thumb');
+
+    // Clear window for fresh drag detection
+    ctx.window.clear();
 
     await ctx.client.mouseDown(scrollbarX, currentHandleY);
     await ctx.delay(dragStartHoldMs);
 
-    const dragDistance = Math.abs(targetHandleY - currentHandleY);
+    const dragDistance = Math.abs(effectiveTargetHandleY - currentHandleY);
     const dragSteps = Math.max(2, Math.min(12, Math.ceil(dragDistance / 12)));
     let lastDragY = currentHandleY;
     for (let step = 1; step <= dragSteps; step++) {
       const interpolation = step / dragSteps;
-      const moveY = Math.round(currentHandleY + ((targetHandleY - currentHandleY) * interpolation));
+      const moveY = Math.round(currentHandleY + ((effectiveTargetHandleY - currentHandleY) * interpolation));
       if (moveY === lastDragY) continue;
       const moveCmds = await ctx.client.mouseMoveAndCollect(scrollbarX, moveY);
-      collector.add(moveCmds);
+      ctx.window.append(moveCmds);
       lastDragY = moveY;
       if (dragStepDelayMs > 0 && step < dragSteps) await ctx.delay(dragStepDelayMs);
     }
 
     await ctx.delay(dragEndHoldMs);
 
-    const dragUpCmds = await ctx.client.mouseUpAndCollect(scrollbarX, targetHandleY);
-    collector.add(dragUpCmds);
-    const dragSettleCmds = await ctx.pollPaintCommands(`drag-settle:${scrollAttempt}`);
-    collector.add(dragSettleCmds);
+    const dragUpCmds = await ctx.client.mouseUpAndCollect(scrollbarX, effectiveTargetHandleY);
+    ctx.window.append(dragUpCmds);
+    await ctx.pollPaintCommands(`drag-settle:${scrollAttempt}`);
 
-    await ctx.delay(200);
+    const dragSettled = await waitForDropdownReady(ctx, {
+      reason: `drag-settle:${scrollAttempt}`,
+      timeoutMs: 2500,
+      requireFreshLabels: true,
+    });
+    let viewAfterDrag = dragSettled.view;
 
-    const closeCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
-    collector.add(closeCmds);
-    await ctx.delay(300);
-
-    const dragReopenCollector = new PaintCollector();
-    const { view: reopenView } = await reopenDropdownFromClosed(ctx, dragReopenCollector, `drag-reopen:${scrollAttempt}`);
-    collector.add(dragReopenCollector.getAll());
-    let viewAfterReopen = reopenView;
-    let viewSourceCommands = dragReopenCollector.getAll();
-    if (!viewAfterReopen) {
-      const settled = await waitForDropdownReady(ctx, {
-        seedCommands: dragReopenCollector.getAll(),
-        reason: `drag-reopen:${scrollAttempt}`,
-        timeoutMs: 2500,
-      });
-      collector.add(settled.commands);
-      viewAfterReopen = settled.view;
-      viewSourceCommands = [...dragReopenCollector.getAll(), ...settled.commands];
-    }
-
-    if (!viewAfterReopen) {
-      const recoveryCollector = new PaintCollector();
-      const { view: recoveryView } = await reopenDropdownFromClosed(
-        ctx,
-        recoveryCollector,
-        `drag-reopen-recovery:${scrollAttempt}`,
-      );
-      collector.add(recoveryCollector.getAll());
-      let recoveredView = recoveryView;
-      let recoverySourceCommands = recoveryCollector.getAll();
-      if (!recoveredView) {
-        const recoverySettled = await waitForDropdownReady(ctx, {
-          seedCommands: recoveryCollector.getAll(),
-          reason: `drag-reopen-recovery:${scrollAttempt}`,
+    if (!viewAfterDrag && dragSettled.closedDetected) {
+      logger.warn({ lightId, index, scrollAttempt }, 'Dropdown closed during drag settle; reopening');
+      ctx.window.clear();
+      const { view: reopenView } = await reopenDropdownFromClosed(ctx, `drag-reopen:${scrollAttempt}`);
+      viewAfterDrag = reopenView;
+      if (!viewAfterDrag) {
+        const reopenSettled = await waitForDropdownReady(ctx, {
+          reason: `drag-reopen:${scrollAttempt}`,
           timeoutMs: 2500,
+          requireFreshLabels: true,
         });
-        collector.add(recoverySettled.commands);
-        recoveredView = recoverySettled.view;
-        recoverySourceCommands = [...recoveryCollector.getAll(), ...recoverySettled.commands];
+        viewAfterDrag = reopenSettled.view;
       }
-
-      if (!recoveredView) {
-        logger.warn({
-          lightId,
-          index,
-          scrollAttempt,
-          targetFirstVisible,
-        }, 'Drag reopen produced no stable view; continuing to next scroll attempt');
-        continue;
-      }
-
-      viewAfterReopen = recoveredView;
-      viewSourceCommands = recoverySourceCommands;
     }
-    ctx.state.applyDropdownView(viewAfterReopen);
-    latestView = viewAfterReopen;
-    latestViewCommands = viewSourceCommands;
+
+    if (!viewAfterDrag) {
+      logger.warn({
+        lightId, index, scrollAttempt, targetFirstVisible,
+      }, 'Drag settle produced no stable view; continuing to next scroll attempt');
+      continue;
+    }
+    ctx.state.applyDropdownView(viewAfterDrag);
 
     if (ctx.state.isDropdownIndexVisible(index)) {
       logger.info({ scrollAttempt, firstVisible: ctx.state.dropdownFirstVisible, index }, 'Target visible after scroll');
     } else {
-      logger.warn({ scrollAttempt, firstVisible: ctx.state.dropdownFirstVisible, targetFirstVisible, index }, 'Target not visible after reopen — will re-drag');
+      logger.warn({ scrollAttempt, firstVisible: ctx.state.dropdownFirstVisible, targetFirstVisible, index }, 'Target not visible after drag — will re-drag');
     }
   }
 
   if (!ctx.state.isDropdownIndexVisible(index)) {
     throw new Error(`Scroll failed after ${maxScrollAttempts} drag attempts: light=${lightId}, index=${index}, firstVisible=${ctx.state.dropdownFirstVisible}, target=${targetFirstVisible}`);
   }
-
-  return { latestView, latestViewCommands };
 }

@@ -19,6 +19,8 @@ export function extractDropdownLabels(commands: PaintCommand[]): DropdownLabel[]
   const listBottom = dropdown.firstItemY + (dropdown.itemHeight * dropdown.visibleItems);
   const listLeft = Math.max(0, dropdown.itemX - 260);
   const listRight = arrowX + 8;
+  const textAnchorMaxLeft = dropdown.itemX - 110;
+  const minLabelWidth = 300;
 
   const labels = extractTextLabels(commands);
   const matched: DropdownLabel[] = [];
@@ -26,6 +28,10 @@ export function extractDropdownLabels(commands: PaintCommand[]): DropdownLabel[]
   for (const label of labels) {
     if (label.top < listTop || label.bottom > listBottom) continue;
     if (label.right < listLeft || label.left > listRight) continue;
+    // Dropdown row labels are left-aligned in the list and span most of the row width.
+    // This rejects unrelated panel labels that happen to overlap the list Y-range.
+    if (label.left > textAnchorMaxLeft) continue;
+    if ((label.right - label.left + 1) < minLabelWidth) continue;
     const index = resolveLightIndexFromLabel(label.text);
     if (index === null) continue;
     const centerY = Math.round((label.top + label.bottom) / 2);

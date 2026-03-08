@@ -22,30 +22,12 @@ RUN npm run build
 # Production stage
 FROM node:20-slim
 
-# Install Playwright dependencies, build tools for native modules, and curl for health checks
+# Install build tools for native modules (better-sqlite3) and curl for health checks
 RUN apt-get update && apt-get install -y \
     curl \
     python3 \
     make \
     g++ \
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libdbus-1-3 \
-    libxkbcommon0 \
-    libatspi2.0-0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libpango-1.0-0 \
-    libcairo2 \
-    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -60,12 +42,6 @@ RUN mkdir -p /data && chown appuser:appuser /data
 COPY package*.json ./
 RUN npm ci --only=production
 
-# Install Playwright browsers to shared location (once)
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
-RUN mkdir -p /opt/playwright \
-    && npx playwright install chromium \
-    && chmod -R 755 /opt/playwright
-
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist
 
@@ -75,7 +51,6 @@ USER appuser
 # Environment variables
 ENV NODE_ENV=production
 ENV PORT=8080
-ENV HEADLESS=true
 
 # Expose ports
 EXPOSE 8080

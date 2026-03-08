@@ -18,6 +18,8 @@ npm run test:acceptance -- T05  # Run specific test
 docker-compose up -d --build   # Deploy
 ```
 
+**Important**: Always run individual tests (`npm run test:acceptance -- T05`) during development. Only run the full suite when explicitly asked — it takes a long time against the live PLC.
+
 No unit tests or linter. `npm run test:acceptance` is the primary validation tool.
 
 ## Architecture
