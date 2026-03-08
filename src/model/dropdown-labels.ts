@@ -39,8 +39,11 @@ export function extractDropdownLabels(commands: PaintCommand[]): DropdownLabel[]
 
 /**
  * Resolve the current dropdown view from paint commands.
- * Uses majority voting on label positions to determine firstVisible.
- * Returns null if fewer than 2 labels agree on firstVisible.
+ * Groups labels by candidate firstVisible (= index - row), then picks the
+ * candidate whose labels appeared most recently. This correctly handles
+ * accumulated commands from multiple scroll positions — the most recently
+ * painted labels reflect the current dropdown state.
+ * Returns null if no candidate has ≥2 distinct rows.
  */
 export function resolveDropdownView(commands: PaintCommand[]): DropdownView | null {
   const allLabels = extractDropdownLabels(commands);
@@ -48,26 +51,43 @@ export function resolveDropdownView(commands: PaintCommand[]): DropdownView | nu
 
   const maxFirstVisible = Math.max(0, lightSwitchList.length - uiCoordinates.lightSwitches.dropdownList.visibleItems);
 
-  // Each label implies firstVisible = index - row. Vote on the most common.
-  const votes = new Map<number, number>();
-  for (const label of allLabels) {
-    const candidate = label.index - label.row;
+  // Group by candidate firstVisible, tracking recency and row coverage
+  const candidates = new Map<number, { count: number; distinctRows: Set<number>; latestIndex: number }>();
+  for (let i = 0; i < allLabels.length; i++) {
+    const candidate = allLabels[i].index - allLabels[i].row;
     if (candidate < 0 || candidate > maxFirstVisible) continue;
-    votes.set(candidate, (votes.get(candidate) ?? 0) + 1);
+    const existing = candidates.get(candidate);
+    if (existing) {
+      existing.count++;
+      existing.distinctRows.add(allLabels[i].row);
+      existing.latestIndex = i;
+    } else {
+      candidates.set(candidate, { count: 1, distinctRows: new Set([allLabels[i].row]), latestIndex: i });
+    }
   }
 
-  if (votes.size === 0) return null;
+  if (candidates.size === 0) return null;
 
+  // Pick candidate by: latest label (primary), distinct rows, count
   let bestCandidate = -1;
+  let bestLatest = -1;
+  let bestRows = 0;
   let bestCount = 0;
-  for (const [candidate, count] of votes) {
-    if (count > bestCount) {
+  for (const [candidate, stats] of candidates) {
+    if (stats.distinctRows.size < 2) continue;
+    const { latestIndex, count } = stats;
+    const rows = stats.distinctRows.size;
+    if (latestIndex > bestLatest ||
+        (latestIndex === bestLatest && rows > bestRows) ||
+        (latestIndex === bestLatest && rows === bestRows && count > bestCount)) {
       bestCandidate = candidate;
+      bestLatest = latestIndex;
+      bestRows = rows;
       bestCount = count;
     }
   }
 
-  if (bestCount < 2) return null;
+  if (bestCandidate < 0) return null;
 
   // Keep only labels consistent with the winning firstVisible, last occurrence per row wins
   const byRow = new Map<number, DropdownLabel>();

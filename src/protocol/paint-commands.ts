@@ -2,10 +2,21 @@
 
 import { BinaryReader } from './binary';
 import {
+  CMD_DRAW_POLYGON,
+  CMD_DRAW_PRIMITIVE,
   CMD_SET_FILL_COLOR,
+  CMD_SET_PEN_STYLE,
+  CMD_SET_FONT,
   CMD_FILL_3D_RECT,
   CMD_CLEAR_RECT,
+  CMD_SET_CLIP_RECT,
+  CMD_RESTORE_CLIP_RECT,
+  CMD_LAYER_SWITCH,
   CMD_DRAW_IMAGE,
+  CMD_SET_AREA_STYLE,
+  CMD_SET_AREA_STYLE_LEGACY,
+  CMD_SET_RENDER_PARAMETER,
+  CMD_SET_CORNER_RADIUS,
   CMD_TOUCH_HANDLING_FLAGS,
   CMD_TOUCH_RECTANGLES,
   CMD_DRAW_TEXT,
@@ -13,10 +24,21 @@ import {
 } from './command-ids';
 
 export {
+  CMD_DRAW_POLYGON,
+  CMD_DRAW_PRIMITIVE,
   CMD_SET_FILL_COLOR,
+  CMD_SET_PEN_STYLE,
+  CMD_SET_FONT,
   CMD_FILL_3D_RECT,
   CMD_CLEAR_RECT,
+  CMD_SET_CLIP_RECT,
+  CMD_RESTORE_CLIP_RECT,
+  CMD_LAYER_SWITCH,
   CMD_DRAW_IMAGE,
+  CMD_SET_AREA_STYLE,
+  CMD_SET_AREA_STYLE_LEGACY,
+  CMD_SET_RENDER_PARAMETER,
+  CMD_SET_CORNER_RADIUS,
   CMD_TOUCH_HANDLING_FLAGS,
   CMD_TOUCH_RECTANGLES,
   CMD_DRAW_TEXT,
@@ -324,6 +346,294 @@ export function extractTextLabels(commands: PaintCommand[]): TextLabelCommand[] 
     labels.push(parsed);
   }
   return labels;
+}
+
+export interface PenStyleCommand {
+  commandId: number;
+  lineStyle: number;
+  strokeEnabled: boolean;
+  lineWidth: number;
+  argb: number;
+  color: { r: number; g: number; b: number; a: number };
+  lineCap: 'butt' | 'square' | 'round';
+  lineJoin: 'miter' | 'bevel' | 'round';
+  miterLimit: number;
+  dashPattern: number[] | null;
+}
+
+export function extractPenStyles(commands: PaintCommand[]): PenStyleCommand[] {
+  const out: PenStyleCommand[] = [];
+  const dashPatternMap: Record<number, number[] | null> = {
+    0: null,
+    1: [8, 3],
+    2: [3, 3],
+    3: [8, 3, 3, 3],
+    4: [8, 3, 3, 3, 3, 3],
+  };
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_SET_PEN_STYLE || cmd.data.length < 10) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    const lineStyle = dv.getUint32(0, true);
+    const argb = dv.getUint32(4, true);
+    const lineWidth = Math.max(1, dv.getUint16(8, true));
+    let lineCap: PenStyleCommand['lineCap'] = 'butt';
+    let lineJoin: PenStyleCommand['lineJoin'] = 'miter';
+    let miterLimit = 1.7 * lineWidth;
+    if (cmd.data.length >= 16) {
+      const capBits = dv.getUint16(10, true);
+      const joinBits = dv.getUint16(12, true);
+      const miterRaw = dv.getUint16(14, true);
+      if ((capBits & 0x2) !== 0) lineCap = 'round';
+      else if ((capBits & 0x1) !== 0) lineCap = 'square';
+      if ((joinBits & 0x2) !== 0) lineJoin = 'round';
+      else if ((joinBits & 0x1) !== 0) lineJoin = 'bevel';
+      miterLimit = miterRaw === 1 ? 1.7 * lineWidth : Math.max(1, 2 * miterRaw);
+    }
+    out.push({
+      commandId: cmd.id,
+      lineStyle,
+      strokeEnabled: lineStyle !== 5,
+      lineWidth,
+      argb,
+      color: {
+        a: (argb >>> 24) & 0xFF,
+        r: (argb >>> 16) & 0xFF,
+        g: (argb >>> 8) & 0xFF,
+        b: argb & 0xFF,
+      },
+      lineCap,
+      lineJoin,
+      miterLimit,
+      dashPattern: dashPatternMap[lineStyle] ?? null,
+    });
+  }
+  return out;
+}
+
+export interface FontCommand {
+  commandId: number;
+  argb: number;
+  size: number;
+  styleFlags: number;
+  family: string;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strikeout: boolean;
+}
+
+export function extractFonts(commands: PaintCommand[]): FontCommand[] {
+  const out: FontCommand[] = [];
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_SET_FONT || cmd.data.length < 12) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    const argb = dv.getUint32(0, true);
+    const styleFlags = dv.getUint32(4, true);
+    const size = dv.getUint16(8, true);
+    const familyLength = dv.getUint16(10, true);
+    if (cmd.data.length < 12 + familyLength) continue;
+    const family = decodeLatin1(cmd.data.subarray(12, 12 + familyLength)).replace(/\x00+$/g, '');
+    out.push({
+      commandId: cmd.id,
+      argb,
+      size,
+      styleFlags,
+      family,
+      bold: (styleFlags & 0x2) !== 0,
+      italic: (styleFlags & 0x1) !== 0,
+      underline: (styleFlags & 0x4) !== 0,
+      strikeout: (styleFlags & 0x8) !== 0,
+    });
+  }
+  return out;
+}
+
+export interface PrimitiveCommandInfo {
+  commandId: number;
+  kind: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
+function parseRectFromTwoPoints(
+  data: Uint8Array,
+  offset: number
+): { left: number; top: number; right: number; bottom: number; width: number; height: number } | null {
+  if (data.length < offset + 8) return null;
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const x1 = dv.getInt16(offset, true);
+  const y1 = dv.getInt16(offset + 2, true);
+  const x2 = dv.getInt16(offset + 4, true);
+  const y2 = dv.getInt16(offset + 6, true);
+  const left = Math.min(x1, x2);
+  const top = Math.min(y1, y2);
+  const right = Math.max(x1, x2);
+  const bottom = Math.max(y1, y2);
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: (right - left) + 1,
+    height: (bottom - top) + 1,
+  };
+}
+
+export function extractPrimitives(commands: PaintCommand[]): PrimitiveCommandInfo[] {
+  const out: PrimitiveCommandInfo[] = [];
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_DRAW_PRIMITIVE || cmd.data.length < 10) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    const kind = dv.getUint16(0, true);
+    const rect = parseRectFromTwoPoints(cmd.data, 2);
+    if (!rect) continue;
+    out.push({
+      commandId: cmd.id,
+      kind,
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+    });
+  }
+  return out;
+}
+
+export interface PolygonCommandInfo {
+  commandId: number;
+  mode: number;
+  pointCount: number;
+}
+
+export function extractPolygons(commands: PaintCommand[]): PolygonCommandInfo[] {
+  const out: PolygonCommandInfo[] = [];
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_DRAW_POLYGON || cmd.data.length < 4) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    out.push({
+      commandId: cmd.id,
+      mode: dv.getUint16(0, true),
+      pointCount: dv.getUint16(2, true),
+    });
+  }
+  return out;
+}
+
+export interface ClipCommandInfo {
+  commandId: number;
+  type: 'set' | 'restore';
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
+export function extractClipCommands(commands: PaintCommand[]): ClipCommandInfo[] {
+  const out: ClipCommandInfo[] = [];
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_SET_CLIP_RECT && cmd.id !== CMD_RESTORE_CLIP_RECT) continue;
+    const rect = parseRectFromTwoPoints(cmd.data, 0);
+    if (!rect) continue;
+    out.push({
+      commandId: cmd.id,
+      type: cmd.id === CMD_SET_CLIP_RECT ? 'set' : 'restore',
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+    });
+  }
+  return out;
+}
+
+export interface LayerSwitchCommand {
+  commandId: number;
+  drawToVisibleLayer: boolean;
+}
+
+export function extractLayerSwitches(commands: PaintCommand[]): LayerSwitchCommand[] {
+  const out: LayerSwitchCommand[] = [];
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_LAYER_SWITCH || cmd.data.length < 2) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    out.push({
+      commandId: cmd.id,
+      drawToVisibleLayer: dv.getUint16(0, true) === 1,
+    });
+  }
+  return out;
+}
+
+export interface AreaStyleCommandInfo {
+  commandId: number;
+  fillDisabled: boolean;
+  borderArgb: number;
+  fillArgb: number;
+}
+
+export function extractAreaStyles(commands: PaintCommand[]): AreaStyleCommandInfo[] {
+  const out: AreaStyleCommandInfo[] = [];
+  for (const cmd of commands) {
+    if ((cmd.id !== CMD_SET_AREA_STYLE && cmd.id !== CMD_SET_AREA_STYLE_LEGACY) || cmd.data.length < 12) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    out.push({
+      commandId: cmd.id,
+      fillDisabled: dv.getUint32(0, true) === 1,
+      borderArgb: dv.getUint32(4, true),
+      fillArgb: dv.getUint32(8, true),
+    });
+  }
+  return out;
+}
+
+export interface RenderParameterCommandInfo {
+  commandId: number;
+  parameterId: number;
+  value: number;
+}
+
+export function extractRenderParameters(commands: PaintCommand[]): RenderParameterCommandInfo[] {
+  const out: RenderParameterCommandInfo[] = [];
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_SET_RENDER_PARAMETER || cmd.data.length < 8) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    out.push({
+      commandId: cmd.id,
+      parameterId: dv.getUint16(0, true),
+      value: dv.getInt32(4, true),
+    });
+  }
+  return out;
+}
+
+export interface CornerRadiusCommandInfo {
+  commandId: number;
+  radiusX: number;
+  radiusY: number;
+}
+
+export function extractCornerRadii(commands: PaintCommand[]): CornerRadiusCommandInfo[] {
+  const out: CornerRadiusCommandInfo[] = [];
+  for (const cmd of commands) {
+    if (cmd.id !== CMD_SET_CORNER_RADIUS || cmd.data.length < 4) continue;
+    const dv = new DataView(cmd.data.buffer, cmd.data.byteOffset, cmd.data.byteLength);
+    out.push({
+      commandId: cmd.id,
+      radiusX: dv.getInt16(0, true),
+      radiusY: dv.getInt16(2, true),
+    });
+  }
+  return out;
 }
 
 export function extractTouchHandlingFlags(commands: PaintCommand[]): TouchHandlingFlagsCommand[] {

@@ -9,6 +9,7 @@ import {
   ImageDrawCommand,
   PaintCommand,
 } from './paint-commands';
+import { getPaintCommandReferenceName } from './command-registry';
 import {
   CMD_CLEAR_RECT,
   CMD_CLEAR_RECT_ALT,
@@ -94,6 +95,17 @@ interface FontState {
   strikeout: boolean;
 }
 
+interface PenState {
+  color: RgbaColor;
+  width: number;
+  strokeEnabled: boolean;
+  lineStyle: number;
+  lineCap: 'butt' | 'square' | 'round';
+  lineJoin: 'miter' | 'bevel' | 'round';
+  miterLimit: number;
+  dashPattern: number[] | null;
+}
+
 interface TextDrawCommand {
   left: number;
   top: number;
@@ -131,6 +143,7 @@ export class ProtocolDebugRenderer {
   private readonly timelinePath: string;
   private readonly backgroundColor: RgbaColor = { r: 255, g: 255, b: 255, a: 255 };
   private readonly surface: PixelSurface;
+  private readonly overlaySurface: PixelSurface;
   private readonly imageSource: NonNullable<ProtocolDebugRendererOptions['imageSource']> | null;
   private readonly imageSourceAgent: https.Agent | null;
   private imagePoolLoadPromise: Promise<void> | null = null;
@@ -171,6 +184,11 @@ export class ProtocolDebugRenderer {
       this.options.width,
       this.options.height,
       this.backgroundColor,
+    );
+    this.overlaySurface = new PixelSurface(
+      this.options.width,
+      this.options.height,
+      { r: 0, g: 0, b: 0, a: 0 },
     );
 
     if (this.options.noDisk) {
@@ -397,10 +415,15 @@ export class ProtocolDebugRenderer {
   private async applyCommands(commands: PaintCommand[]): Promise<RenderStats> {
     let currentFill: RgbaColor = { r: 255, g: 255, b: 255, a: 255 };
     let fillDisabled = false;
-    let currentPen: { color: RgbaColor; width: number; strokeEnabled: boolean } = {
+    let currentPen: PenState = {
       color: { r: 0, g: 0, b: 0, a: 255 },
       width: 1,
       strokeEnabled: true,
+      lineStyle: 0,
+      lineCap: 'butt',
+      lineJoin: 'miter',
+      miterLimit: 1.5,
+      dashPattern: null,
     };
     let currentFont: FontState = {
       family: 'Arial',
@@ -415,6 +438,8 @@ export class ProtocolDebugRenderer {
     const clipStack: SurfaceClipRect[] = [];
     let cornerRadiusX = -1;
     let cornerRadiusY = -1;
+    let drawToOverlay = false;
+    const activeSurface = () => (drawToOverlay ? this.overlaySurface : this.surface);
     let imageCount = 0;
     let processedImageCount = 0;
     let skippedImageCount = 0;
@@ -452,12 +477,19 @@ export class ProtocolDebugRenderer {
         if (areaStyle) {
           currentFill = areaStyle.fillColor;
           fillDisabled = areaStyle.fillDisabled;
+          currentPen = {
+            ...currentPen,
+            color: areaStyle.borderColor,
+          };
         }
         continue;
       }
 
       if (command.id === CMD_LAYER_SWITCH) {
-        // The browser toggles between layer contexts here. The debug renderer keeps one cumulative surface.
+        const nextLayer = this.parseLayerSwitchCommand(command);
+        if (nextLayer !== null) {
+          drawToOverlay = nextLayer;
+        }
         continue;
       }
 
@@ -526,25 +558,41 @@ export class ProtocolDebugRenderer {
       if (command.id === CMD_DRAW_POLYGON || command.id === CMD_DRAW_POLYGON_FLOAT) {
         const polygon = this.parsePolygonCommand(command);
         if (polygon && polygon.points.length >= 2) {
+          const surface = activeSurface();
           const shouldFill = polygon.mode === 0 && !fillDisabled;
           const shouldStroke = currentPen.strokeEnabled;
           if (shouldFill && polygon.points.length >= 3) {
-            this.surface.fillPolygon(polygon.points, this.withVisibleAlpha(currentFill), clipRect ?? undefined);
+            surface.fillPolygon(polygon.points, this.withVisibleAlpha(currentFill), clipRect ?? undefined);
           }
           if (shouldStroke) {
             if (polygon.mode === 0) {
-              this.surface.strokePolygon(
+              surface.strokePolygon(
                 polygon.points,
                 this.withVisibleAlpha(currentPen.color),
                 currentPen.width,
                 clipRect ?? undefined,
+                currentPen.dashPattern,
+                currentPen.lineCap,
+                currentPen.lineJoin,
+              );
+            } else if (polygon.mode === 2) {
+              surface.strokeBezierPolyline(
+                polygon.points,
+                this.withVisibleAlpha(currentPen.color),
+                currentPen.width,
+                clipRect ?? undefined,
+                currentPen.dashPattern,
+                currentPen.lineCap,
               );
             } else {
-              this.surface.strokePolyline(
+              surface.strokePolyline(
                 polygon.points,
                 this.withVisibleAlpha(currentPen.color),
                 currentPen.width,
                 clipRect ?? undefined,
+                currentPen.dashPattern,
+                currentPen.lineCap,
+                currentPen.lineJoin,
               );
             }
           }
@@ -555,28 +603,26 @@ export class ProtocolDebugRenderer {
       if (command.id === CMD_FILL_3D_RECT) {
         const parsed = this.parseFill3dRectCommand(command);
         if (!parsed) continue;
-        const color = parsed.color ?? currentFill;
-        if (!fillDisabled) {
-          this.surface.fillRect(
-            parsed.x,
-            parsed.y,
-            parsed.width,
-            parsed.height,
-            this.withVisibleAlpha(color),
-            clipRect ?? undefined,
-          );
-        }
-        if (currentPen.strokeEnabled) {
-          this.surface.strokeRect(
-            parsed.x,
-            parsed.y,
-            parsed.width,
-            parsed.height,
-            this.withVisibleAlpha(currentPen.color),
-            currentPen.width,
-            clipRect ?? undefined,
-          );
-        }
+        const surface = activeSurface();
+        // Reference Fill3DRect always fills with its own color (not currentFill),
+        // does NOT check fillDisabled/wm(), and uses lineWidth=1 for borders.
+        surface.fillRect(
+          parsed.x,
+          parsed.y,
+          parsed.width,
+          parsed.height,
+          this.withVisibleAlpha(parsed.color),
+          clipRect ?? undefined,
+        );
+        surface.strokeRect(
+          parsed.x,
+          parsed.y,
+          parsed.width,
+          parsed.height,
+          this.withVisibleAlpha(parsed.color),
+          1,
+          clipRect ?? undefined,
+        );
         continue;
       }
 
@@ -585,9 +631,10 @@ export class ProtocolDebugRenderer {
         if (!points || fillDisabled) {
           continue;
         }
+        const surface = activeSurface();
         const color = this.withVisibleAlpha(currentFill);
         for (const point of points) {
-          this.surface.fillRect(point.x, point.y, 1, 1, color, clipRect ?? undefined);
+          surface.fillRect(point.x, point.y, 1, 1, color, clipRect ?? undefined);
         }
         continue;
       }
@@ -600,13 +647,14 @@ export class ProtocolDebugRenderer {
       ) {
         const primitive = this.parsePrimitiveCommand(command);
         if (!primitive) continue;
+        const surface = activeSurface();
         const strokeColor = this.withVisibleAlpha(currentPen.color);
         const fillColor = this.withVisibleAlpha(currentFill);
         const shouldFill = !fillDisabled;
 
         if (primitive.kind === 3) {
           if (currentPen.strokeEnabled) {
-            this.surface.drawLine(
+            surface.drawLine(
               primitive.x,
               primitive.y + primitive.height - 1,
               primitive.x + primitive.width - 1,
@@ -614,6 +662,8 @@ export class ProtocolDebugRenderer {
               strokeColor,
               currentPen.width,
               clipRect ?? undefined,
+              currentPen.dashPattern,
+              currentPen.lineCap,
             );
           }
           continue;
@@ -621,7 +671,7 @@ export class ProtocolDebugRenderer {
 
         if (primitive.kind === 4) {
           if (currentPen.strokeEnabled) {
-            this.surface.drawLine(
+            surface.drawLine(
               primitive.x,
               primitive.y,
               primitive.x + primitive.width - 1,
@@ -629,6 +679,8 @@ export class ProtocolDebugRenderer {
               strokeColor,
               currentPen.width,
               clipRect ?? undefined,
+              currentPen.dashPattern,
+              currentPen.lineCap,
             );
           }
           continue;
@@ -636,7 +688,7 @@ export class ProtocolDebugRenderer {
 
         if (primitive.kind === 2) {
           if (shouldFill) {
-            this.surface.fillEllipse(
+            surface.fillEllipse(
               primitive.x,
               primitive.y,
               primitive.width,
@@ -646,22 +698,24 @@ export class ProtocolDebugRenderer {
             );
           }
           if (currentPen.strokeEnabled) {
-            this.surface.strokeEllipse(
+            surface.strokeEllipse(
               primitive.x,
               primitive.y,
-              primitive.width,
-              primitive.height,
-              strokeColor,
-              currentPen.width,
-              clipRect ?? undefined,
-            );
-          }
-          continue;
+                primitive.width,
+                primitive.height,
+                strokeColor,
+                currentPen.width,
+                clipRect ?? undefined,
+                currentPen.dashPattern,
+                currentPen.lineCap,
+              );
+            }
+            continue;
         }
 
         if (primitive.kind === 1) {
           if (shouldFill) {
-            this.surface.fillRoundedRect(
+            surface.fillRoundedRect(
               primitive.x,
               primitive.y,
               primitive.width,
@@ -673,23 +727,26 @@ export class ProtocolDebugRenderer {
             );
           }
           if (currentPen.strokeEnabled) {
-            this.surface.strokeRoundedRect(
+            surface.strokeRoundedRect(
               primitive.x,
               primitive.y,
               primitive.width,
               primitive.height,
               cornerRadiusX,
-              cornerRadiusY,
-              strokeColor,
-              currentPen.width,
-              clipRect ?? undefined,
-            );
-          }
-          continue;
+                cornerRadiusY,
+                strokeColor,
+                currentPen.width,
+                clipRect ?? undefined,
+                currentPen.dashPattern,
+                currentPen.lineCap,
+                currentPen.lineJoin,
+              );
+            }
+            continue;
         }
 
         if (shouldFill) {
-          this.surface.fillRect(
+          surface.fillRect(
             primitive.x,
             primitive.y,
             primitive.width,
@@ -699,7 +756,7 @@ export class ProtocolDebugRenderer {
           );
         }
         if (currentPen.strokeEnabled) {
-          this.surface.strokeRect(
+          surface.strokeRect(
             primitive.x,
             primitive.y,
             primitive.width,
@@ -707,6 +764,9 @@ export class ProtocolDebugRenderer {
             strokeColor,
             currentPen.width,
             clipRect ?? undefined,
+            currentPen.dashPattern,
+            currentPen.lineCap,
+            currentPen.lineJoin,
           );
         }
         continue;
@@ -715,7 +775,7 @@ export class ProtocolDebugRenderer {
       if (command.id === CMD_CLEAR_RECT || command.id === CMD_CLEAR_RECT_ALT) {
         const parsed = this.parseRectFromTwoPoints(command);
         if (!parsed) continue;
-        this.surface.clearRect(
+        activeSurface().clearRect(
           parsed.x,
           parsed.y,
           parsed.width,
@@ -723,21 +783,15 @@ export class ProtocolDebugRenderer {
           this.backgroundColor,
           clipRect ?? undefined,
         );
-        if (command.id === CMD_CLEAR_RECT_ALT) {
-          clipRect = this.normalizeClipRect(parsed.x, parsed.y, parsed.width, parsed.height);
-        }
+        // Reference ClearRectAndClip only clears the rect — it does NOT set a clip.
+        // ClearRect pushes to a separate clip region collection (ti.cm), which the debug
+        // renderer does not model.
         continue;
       }
 
       if (command.id === CMD_CLEAR_ALL) {
-        this.surface.clearRect(
-          0,
-          0,
-          this.options.width,
-          this.options.height,
-          this.backgroundColor,
-          clipRect ?? undefined,
-        );
+        this.surface.clearRect(0, 0, this.options.width, this.options.height, this.backgroundColor, clipRect ?? undefined);
+        this.overlaySurface.clearRect(0, 0, this.options.width, this.options.height, { r: 0, g: 0, b: 0, a: 0 }, clipRect ?? undefined);
         continue;
       }
 
@@ -758,7 +812,7 @@ export class ProtocolDebugRenderer {
         let renderedFromSource = false;
         const external = await this.resolveExternalImage(image.imageId);
         if (external) {
-          this.surface.blitRgbaImage(
+          activeSurface().blitRgbaImage(
             external.data,
             external.width,
             external.height,
@@ -773,11 +827,12 @@ export class ProtocolDebugRenderer {
         }
 
         if (!renderedFromSource) {
+          const surface = activeSurface();
           const style = this.resolveImageStyle(image.imageId, image.flags, image.tintColor);
           if (style.fill) {
-            this.surface.fillRect(image.x, image.y, image.width, image.height, style.fill, clipRect ?? undefined);
+            surface.fillRect(image.x, image.y, image.width, image.height, style.fill, clipRect ?? undefined);
           }
-          this.surface.strokeRect(image.x, image.y, image.width, image.height, style.border, 1, clipRect ?? undefined);
+          surface.strokeRect(image.x, image.y, image.width, image.height, style.border, 1, clipRect ?? undefined);
         }
         imageCount++;
         continue;
@@ -819,6 +874,17 @@ export class ProtocolDebugRenderer {
 
   private renderCurrentSurface(eventTag?: number, eventPosition?: { x: number; y: number }): Buffer {
     const frame = this.surface.clone();
+    frame.blitRgbaImage(
+      this.overlaySurface.pixels,
+      this.overlaySurface.width,
+      this.overlaySurface.height,
+      0,
+      0,
+      this.overlaySurface.width,
+      this.overlaySurface.height,
+      null,
+      undefined,
+    );
     const stripe = this.getEventStripeColor(eventTag);
     frame.fillRect(0, 0, this.options.width, 4, stripe);
     if (eventPosition) {
@@ -849,7 +915,7 @@ export class ProtocolDebugRenderer {
     };
   }
 
-  private parsePenStyleCommand(command: PaintCommand): { color: RgbaColor; width: number; strokeEnabled: boolean } | null {
+  private parsePenStyleCommand(command: PaintCommand): PenState | null {
     if (command.data.length < 10) {
       return null;
     }
@@ -857,10 +923,49 @@ export class ProtocolDebugRenderer {
     const lineStyle = dv.getUint32(0, true);
     const widthRaw = Math.max(0, dv.getUint16(8, true));
     const color = this.withVisibleAlpha(this.argbToColor(dv.getUint32(4, true)));
+    let lineCap: PenState['lineCap'] = 'butt';
+    let lineJoin: PenState['lineJoin'] = 'miter';
+    let miterLimit = 1.7 * Math.max(1, widthRaw || 1);
+
+    if (command.data.length >= 16) {
+      const capBits = dv.getUint16(10, true);
+      const joinBits = dv.getUint16(12, true);
+      const miterRaw = dv.getUint16(14, true);
+
+      if ((capBits & 0x2) !== 0) {
+        lineCap = 'round';
+      } else if ((capBits & 0x1) !== 0) {
+        lineCap = 'square';
+      }
+
+      if ((joinBits & 0x2) !== 0) {
+        lineJoin = 'round';
+      } else if ((joinBits & 0x1) !== 0) {
+        lineJoin = 'bevel';
+      }
+
+      miterLimit = miterRaw === 1
+        ? 1.7 * Math.max(1, widthRaw || 1)
+        : Math.max(1, 2 * miterRaw);
+    }
+
+    const dashPatternMap: Record<number, number[] | null> = {
+      0: null,
+      1: [8, 3],
+      2: [3, 3],
+      3: [8, 3, 3, 3],
+      4: [8, 3, 3, 3, 3, 3],
+    };
+
     return {
       color,
       width: Math.max(1, Math.min(8, widthRaw || 1)),
       strokeEnabled: lineStyle !== 5,
+      lineStyle,
+      lineCap,
+      lineJoin,
+      miterLimit,
+      dashPattern: dashPatternMap[lineStyle] ?? null,
     };
   }
 
@@ -893,14 +998,19 @@ export class ProtocolDebugRenderer {
     };
   }
 
-  private parseAreaStyleCommand(command: PaintCommand): { fillColor: RgbaColor; fillDisabled: boolean } | null {
+  private parseAreaStyleCommand(command: PaintCommand): {
+    fillColor: RgbaColor;
+    borderColor: RgbaColor;
+    fillDisabled: boolean;
+  } | null {
     if (command.data.length < 12) {
       return null;
     }
     const dv = new DataView(command.data.buffer, command.data.byteOffset, command.data.byteLength);
     const fillDisabled = dv.getUint32(0, true) === 1;
-    const fillColor = this.withVisibleAlpha(this.argbToColor(dv.getUint32(4, true)));
-    return { fillColor, fillDisabled };
+    const borderColor = this.withVisibleAlpha(this.argbToColor(dv.getUint32(4, true)));
+    const fillColor = this.withVisibleAlpha(this.argbToColor(dv.getUint32(8, true)));
+    return { fillColor, borderColor, fillDisabled };
   }
 
   private parseVisualizationNamespace(command: PaintCommand): string | null {
@@ -949,6 +1059,14 @@ export class ProtocolDebugRenderer {
     };
   }
 
+  private parseLayerSwitchCommand(command: PaintCommand): boolean | null {
+    if (command.data.length < 2) {
+      return null;
+    }
+    const dv = new DataView(command.data.buffer, command.data.byteOffset, command.data.byteLength);
+    return dv.getUint16(0, true) === 1;
+  }
+
   private parseCursorStyleCommand(command: PaintCommand): string | null {
     if (command.data.length < 2) {
       return null;
@@ -979,8 +1097,14 @@ export class ProtocolDebugRenderer {
       return;
     }
     this.warnedUnhandledCommandIds.add(command.id);
+    const referenceName = getPaintCommandReferenceName(command.id);
     logger.warn(
-      { commandId: command.id, size: command.size, dataLength: command.data.length },
+      {
+        commandId: command.id,
+        commandName: referenceName ?? undefined,
+        size: command.size,
+        dataLength: command.data.length,
+      },
       'Unhandled paint command encountered',
     );
   }
@@ -1143,23 +1267,58 @@ export class ProtocolDebugRenderer {
     y: number;
     width: number;
     height: number;
-    color?: RgbaColor;
+    style: number;
+    color: RgbaColor;
   } | null {
-    // Fill3DRect format: x(2) + y(2) + width(2) + height(2) [+ fillArgb(4) [+ highlightArgb(4) + shadowArgb(4)]]
-    if (command.data.length < 8) {
+    // Fill3DRect format (from reference webvisu.js Fill3DRect constructor):
+    //   4 quad points: 8 × int16 = 16 bytes  (GeometryUtil.ad reads 4 points)
+    //   raised flag:   int8                   (1 byte)
+    //   style:         int8                   (1 byte)
+    //   style 2/4:     fillArgb(4) + highlightArgb(4) + shadowArgb(4)
+    //   style 1/3:     borderWidth(int16) + fillArgb(4)
+    // Minimum size: 16 + 2 = 18 bytes.
+    if (command.data.length < 18) {
       return null;
     }
     const dv = new DataView(command.data.buffer, command.data.byteOffset, command.data.byteLength);
-    const x = dv.getInt16(0, true);
-    const y = dv.getInt16(2, true);
-    const width = dv.getInt16(4, true);
-    const height = dv.getInt16(6, true);
-    const rect = { x, y, width, height };
 
-    if (command.data.length >= 12) {
-      return { ...rect, color: this.withVisibleAlpha(this.argbToColor(dv.getUint32(8, true))) };
+    // Read quad: point[0]=(left,top), point[2]=(right,bottom)
+    const left = dv.getInt16(0, true);    // point[0].x
+    const top = dv.getInt16(2, true);     // point[0].y
+    // point[1] at offsets 4-7 (skip)
+    const right = dv.getInt16(8, true);   // point[2].x
+    const bottom = dv.getInt16(10, true); // point[2].y
+    // point[3] at offsets 12-15 (skip)
+
+    const x = Math.min(left, right);
+    const y = Math.min(top, bottom);
+    const width = Math.abs(right - left);
+    const height = Math.abs(bottom - top);
+
+    // byte 16: raised flag (unused for debug rendering)
+    const style = dv.getInt8(17);
+
+    // Style 0 or unknown: no-op in reference (switch has no default case)
+    if (style < 1 || style > 4) {
+      return null;
     }
-    return rect;
+
+    // Read fill color based on style
+    let fillArgb: number;
+    if (style === 2 || style === 4) {
+      if (command.data.length < 22) return null;
+      fillArgb = dv.getUint32(18, true);
+    } else {
+      // style 1 or 3: int16 borderWidth at offset 18, then uint32 fillColor at offset 20
+      if (command.data.length < 24) return null;
+      fillArgb = dv.getUint32(20, true);
+    }
+
+    return {
+      x, y, width, height,
+      style,
+      color: this.withVisibleAlpha(this.argbToColor(fillArgb)),
+    };
   }
 
   private parseRectFromTwoPoints(
@@ -1892,12 +2051,21 @@ class PixelSurface {
     color: RgbaColor,
     thickness: number,
     clip?: SurfaceClipRect,
+    dashPattern?: number[] | null,
+    lineCap: 'butt' | 'square' | 'round' = 'butt',
+    lineJoin: 'miter' | 'bevel' | 'round' = 'miter',
   ): void {
-    const line = Math.max(1, Math.floor(thickness));
-    this.fillRect(x, y, width, line, color, clip);
-    this.fillRect(x, y + height - line, width, line, color, clip);
-    this.fillRect(x, y, line, height, color, clip);
-    this.fillRect(x + width - line, y, line, height, color, clip);
+    this.drawLine(x, y, x + width - 1, y, color, thickness, clip, dashPattern, lineCap);
+    this.drawLine(x + width - 1, y, x + width - 1, y + height - 1, color, thickness, clip, dashPattern, lineCap);
+    this.drawLine(x + width - 1, y + height - 1, x, y + height - 1, color, thickness, clip, dashPattern, lineCap);
+    this.drawLine(x, y + height - 1, x, y, color, thickness, clip, dashPattern, lineCap);
+    if (lineJoin === 'round') {
+      const radius = Math.max(1, Math.floor(thickness / 2));
+      this.fillEllipse(x - radius, y - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+      this.fillEllipse(x + width - 1 - radius, y - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+      this.fillEllipse(x + width - 1 - radius, y + height - 1 - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+      this.fillEllipse(x - radius, y + height - 1 - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+    }
   }
 
   fillRoundedRect(
@@ -1927,12 +2095,15 @@ class PixelSurface {
     color: RgbaColor,
     thickness: number,
     clip?: SurfaceClipRect,
+    dashPattern?: number[] | null,
+    lineCap: 'butt' | 'square' | 'round' = 'butt',
+    lineJoin: 'miter' | 'bevel' | 'round' = 'miter',
   ): void {
     if (radiusX <= 0 || radiusY <= 0) {
-      this.strokeRect(x, y, width, height, color, thickness, clip);
+      this.strokeRect(x, y, width, height, color, thickness, clip, dashPattern, lineCap, lineJoin);
       return;
     }
-    this.strokeRect(x, y, width, height, color, thickness, clip);
+    this.strokeRect(x, y, width, height, color, thickness, clip, dashPattern, lineCap, lineJoin);
   }
 
   drawLine(
@@ -1943,21 +2114,41 @@ class PixelSurface {
     color: RgbaColor,
     thickness: number = 1,
     clip?: SurfaceClipRect,
+    dashPattern?: number[] | null,
+    lineCap: 'butt' | 'square' | 'round' = 'butt',
   ): void {
     let cx0 = Math.round(x0);
     let cy0 = Math.round(y0);
-    const cx1 = Math.round(x1);
-    const cy1 = Math.round(y1);
+    let cx1 = Math.round(x1);
+    let cy1 = Math.round(y1);
+    const size = Math.max(1, Math.floor(thickness));
+    const half = Math.floor(size / 2);
+
+    // Square line caps extend both endpoints by half line width.
+    if (lineCap === 'square') {
+      const dx = cx1 - cx0;
+      const dy = cy1 - cy0;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) {
+        const ext = half;
+        const ux = dx / len;
+        const uy = dy / len;
+        cx0 = Math.round(cx0 - (ux * ext));
+        cy0 = Math.round(cy0 - (uy * ext));
+        cx1 = Math.round(cx1 + (ux * ext));
+        cy1 = Math.round(cy1 + (uy * ext));
+      }
+    }
+
     const dx = Math.abs(cx1 - cx0);
     const sx = cx0 < cx1 ? 1 : -1;
     const dy = -Math.abs(cy1 - cy0);
     const sy = cy0 < cy1 ? 1 : -1;
     let err = dx + dy;
-    const size = Math.max(1, Math.floor(thickness));
-    const half = Math.floor(size / 2);
+    const points: SurfacePoint[] = [];
 
     while (true) {
-      this.fillRect(cx0 - half, cy0 - half, size, size, color, clip);
+      points.push({ x: cx0, y: cy0 });
       if (cx0 === cx1 && cy0 === cy1) {
         break;
       }
@@ -1971,25 +2162,123 @@ class PixelSurface {
         cy0 += sy;
       }
     }
+
+    let draw = true;
+    let dashIndex = 0;
+    let dashRemaining = dashPattern && dashPattern.length > 0
+      ? Math.max(1, Math.round(dashPattern[0]))
+      : Number.POSITIVE_INFINITY;
+
+    for (const point of points) {
+      if (draw) {
+        this.fillRect(point.x - half, point.y - half, size, size, color, clip);
+      }
+      dashRemaining--;
+      if (dashRemaining <= 0 && dashPattern && dashPattern.length > 0) {
+        dashIndex = (dashIndex + 1) % dashPattern.length;
+        dashRemaining = Math.max(1, Math.round(dashPattern[dashIndex]));
+        draw = !draw;
+      }
+    }
+
+    if (lineCap === 'round') {
+      const radius = Math.max(1, Math.floor(size / 2));
+      this.fillEllipse(Math.round(x0) - radius, Math.round(y0) - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+      this.fillEllipse(Math.round(x1) - radius, Math.round(y1) - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+    }
   }
 
-  strokePolyline(points: SurfacePoint[], color: RgbaColor, thickness: number = 1, clip?: SurfaceClipRect): void {
+  strokePolyline(
+    points: SurfacePoint[],
+    color: RgbaColor,
+    thickness: number = 1,
+    clip?: SurfaceClipRect,
+    dashPattern?: number[] | null,
+    lineCap: 'butt' | 'square' | 'round' = 'butt',
+    lineJoin: 'miter' | 'bevel' | 'round' = 'miter',
+  ): void {
     if (points.length < 2) {
       return;
     }
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i];
       const b = points[i + 1];
-      this.drawLine(a.x, a.y, b.x, b.y, color, thickness, clip);
+      this.drawLine(a.x, a.y, b.x, b.y, color, thickness, clip, dashPattern, lineCap);
+      if (lineJoin === 'round') {
+        const radius = Math.max(1, Math.floor(thickness / 2));
+        this.fillEllipse(b.x - radius, b.y - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+      }
     }
   }
 
-  strokePolygon(points: SurfacePoint[], color: RgbaColor, thickness: number = 1, clip?: SurfaceClipRect): void {
+  strokePolygon(
+    points: SurfacePoint[],
+    color: RgbaColor,
+    thickness: number = 1,
+    clip?: SurfaceClipRect,
+    dashPattern?: number[] | null,
+    lineCap: 'butt' | 'square' | 'round' = 'butt',
+    lineJoin: 'miter' | 'bevel' | 'round' = 'miter',
+  ): void {
     if (points.length < 2) {
       return;
     }
-    this.strokePolyline(points, color, thickness, clip);
-    this.drawLine(points[points.length - 1].x, points[points.length - 1].y, points[0].x, points[0].y, color, thickness, clip);
+    this.strokePolyline(points, color, thickness, clip, dashPattern, lineCap, lineJoin);
+    this.drawLine(
+      points[points.length - 1].x,
+      points[points.length - 1].y,
+      points[0].x,
+      points[0].y,
+      color,
+      thickness,
+      clip,
+      dashPattern,
+      lineCap,
+    );
+    if (lineJoin === 'round') {
+      const radius = Math.max(1, Math.floor(thickness / 2));
+      this.fillEllipse(points[0].x - radius, points[0].y - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+    }
+  }
+
+  strokeBezierPolyline(
+    points: SurfacePoint[],
+    color: RgbaColor,
+    thickness: number = 1,
+    clip?: SurfaceClipRect,
+    dashPattern?: number[] | null,
+    lineCap: 'butt' | 'square' | 'round' = 'butt',
+  ): void {
+    if (points.length < 2) {
+      return;
+    }
+
+    let current = points[0];
+    let i = 1;
+
+    for (; i + 2 < points.length; i += 3) {
+      const c1 = points[i];
+      const c2 = points[i + 1];
+      const end = points[i + 2];
+      const estimate = Math.hypot(c1.x - current.x, c1.y - current.y)
+        + Math.hypot(c2.x - c1.x, c2.y - c1.y)
+        + Math.hypot(end.x - c2.x, end.y - c2.y);
+      const steps = Math.max(8, Math.ceil(estimate / 4));
+      let prev = current;
+      for (let step = 1; step <= steps; step++) {
+        const t = step / steps;
+        const next = this.sampleCubicBezierPoint(current, c1, c2, end, t);
+        this.drawLine(prev.x, prev.y, next.x, next.y, color, thickness, clip, dashPattern, lineCap);
+        prev = next;
+      }
+      current = end;
+    }
+
+    for (; i < points.length; i++) {
+      const next = points[i];
+      this.drawLine(current.x, current.y, next.x, next.y, color, thickness, clip, dashPattern, lineCap);
+      current = next;
+    }
   }
 
   fillPolygon(points: SurfacePoint[], color: RgbaColor, clip?: SurfaceClipRect): void {
@@ -2062,6 +2351,8 @@ class PixelSurface {
     color: RgbaColor,
     thickness: number,
     clip?: SurfaceClipRect,
+    dashPattern?: number[] | null,
+    lineCap: 'butt' | 'square' | 'round' = 'butt',
   ): void {
     const bounds = this.getDrawBounds(x, y, width, height, clip);
     if (!bounds) {
@@ -2093,6 +2384,12 @@ class PixelSurface {
           this.fillRect(px, py, 1, 1, color);
         }
       }
+    }
+    if (lineCap === 'round' && dashPattern && dashPattern.length > 0) {
+      // Ellipse raster path ignores dash patterns; add endpoint dots to keep round-cap appearance.
+      const radius = Math.max(1, Math.floor(thickness / 2));
+      this.fillEllipse(Math.round(cx + rx) - radius, Math.round(cy) - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
+      this.fillEllipse(Math.round(cx - rx) - radius, Math.round(cy) - radius, radius * 2 + 1, radius * 2 + 1, color, clip);
     }
   }
 
@@ -2192,6 +2489,26 @@ class PixelSurface {
       return null;
     }
     return { left, top, width: drawWidth, height: drawHeight, x0, y0, x1, y1 };
+  }
+
+  private sampleCubicBezierPoint(
+    p0: SurfacePoint,
+    p1: SurfacePoint,
+    p2: SurfacePoint,
+    p3: SurfacePoint,
+    t: number,
+  ): SurfacePoint {
+    const mt = 1 - t;
+    const mt2 = mt * mt;
+    const t2 = t * t;
+    const a = mt2 * mt;
+    const b = 3 * mt2 * t;
+    const c = 3 * mt * t2;
+    const d = t2 * t;
+    return {
+      x: Math.round((a * p0.x) + (b * p1.x) + (c * p2.x) + (d * p3.x)),
+      y: Math.round((a * p0.y) + (b * p1.y) + (c * p2.y) + (d * p3.y)),
+    };
   }
 }
 
