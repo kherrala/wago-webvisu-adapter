@@ -10,7 +10,7 @@ import {
 } from './config';
 import { IWebVisuController, LightStatus } from './controller-interface';
 import { WebVisuProtocolClient } from './protocol/client';
-import { buildViewportEvent } from './protocol/messages';
+import { buildViewportEvent } from './events';
 import { PaintCommand } from './protocol/paint-commands';
 import { ProtocolDebugRenderer } from './renderer';
 import pino from 'pino';

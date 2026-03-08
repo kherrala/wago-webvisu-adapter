@@ -22,6 +22,10 @@ import {
   buildIsRegisteredClient,
   parseIsRegisteredResponse,
   buildRemoveClient,
+  parsePaintDataResponse,
+  PaintDataResponse,
+} from './messages';
+import {
   buildViewportEvent,
   buildCapabilitiesEvent,
   buildStartVisuEvent,
@@ -30,9 +34,8 @@ import {
   buildMouseDown,
   buildMouseUp,
   buildContinuation,
-  parsePaintDataResponse,
-  PaintDataResponse,
-} from './messages';
+} from '../events';
+import { getEventName, isPackedCoordinateEvent, unpackPointX, unpackPointY } from '../events';
 import { extractDrawImages, extractTextLabels, parsePaintCommands, PaintCommand } from './paint-commands';
 import { BinaryReader, findTlvEntry, parseFrame, readTlvEntries } from './binary';
 import { getPaintCommandReferenceName } from './command-registry';
@@ -880,23 +883,7 @@ export class WebVisuProtocolClient {
   }
 
   private getPaintEventName(eventTag: number): string {
-    const map: Record<number, string> = {
-      1: 'Heartbeat',
-      2: 'MouseDown',
-      8: 'MouseClick',
-      4: 'MouseUp',
-      16: 'MouseMove',
-      32: 'MouseDblClick',
-      64: 'MouseWheel',
-      128: 'KeyDown',
-      256: 'KeyUp',
-      257: 'KeyPress',
-      2048: 'MouseEnter',
-      516: 'ViewportInfo',
-      4096: 'MouseOut',
-      1048576: 'Control',
-    };
-    return map[eventTag] ?? `Event(${eventTag})`;
+    return getEventName(eventTag);
   }
 
   private decodeGetPaintRequestEvent(serviceFrameBuf: ArrayBuffer): ProtocolPaintRequestEvent | null {
@@ -918,9 +905,9 @@ export class WebVisuProtocolClient {
       const extra = findTlvEntry(innerEntries, 2);
       const clip = findTlvEntry(innerEntries, 3);
       const scale = findTlvEntry(innerEntries, 5);
-      const packedCoordinates = eventTag === 2 || eventTag === 4 || eventTag === 8 || eventTag === 16 || eventTag === 32;
-      const x = packedCoordinates ? ((param1 >>> 16) & 0xffff) : param1;
-      const y = packedCoordinates ? (param1 & 0xffff) : param2;
+      const packedCoordinates = isPackedCoordinateEvent(eventTag);
+      const x = packedCoordinates ? unpackPointX(param1) : param1;
+      const y = packedCoordinates ? unpackPointY(param1) : param2;
 
       return {
         eventTag,
