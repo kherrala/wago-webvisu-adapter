@@ -75,13 +75,14 @@ curl http://localhost:8080/api/lights
 | `MCP_PORT` | `3002` | MCP SSE server port |
 | `DB_PATH` | `./data/lights.db` | SQLite database path |
 | `POLLING_ENABLED` | `true` | Enable background light status polling |
+| `POLL_INTERVAL_MS` | `2000` | Delay between individual polls (ms) |
 | `POLL_CYCLE_DELAY_MS` | `30000` | Delay between full polling cycles (ms) |
 | `PROTOCOL_HOST` | `192.168.1.10` | PLC hostname |
 | `PROTOCOL_PORT` | `443` | PLC HTTPS port |
 | `PROTOCOL_TIMEOUT` | `5000` | Per-request timeout (ms) |
 | `HEADLESS` | `true` | Headless browser (Playwright mode only) |
 | `PROTOCOL_DEBUG_HTTP` | `false` | Verbose protocol HTTP frame logs |
-| `PROTOCOL_SESSION_TRACE` | `true` | Write per-session protocol frames to trace files |
+| `PROTOCOL_SESSION_TRACE` | `false` | Write per-session protocol frames to trace files |
 | `PROTOCOL_SESSION_TRACE_DIR` | `/data/protocol-trace` | Directory for session trace files |
 | `PROTOCOL_LOG_RAW_FRAME_DATA` | `false` | Include raw frame bytes in logs |
 | `PROTOCOL_DEBUG_RENDER` | `false` | Render paint commands into PNG debug frames |
@@ -115,32 +116,34 @@ curl http://localhost:8080/api/lights
     {
       "id": "kylpyhuone",
       "name": "Kylpyhuone",
-      "hasDualFunction": false,
+      "floor": "ground",
+      "isOn": true,
+      "polledAt": "2025-01-15T10:23:00.000Z",
       "controllers": [
         {"switchId": "kylpyhuone-1", "switchName": "Kylpyhuone 1", "functionNumber": 1}
       ],
-      "isOn": true,
-      "isOn2": null,
-      "polledAt": "2025-01-15T10:23:00.000Z",
       "href": "/api/lights/kylpyhuone"
     },
     {
       "id": "sauna-laude-ledi",
       "name": "Saunan laude ledi",
-      "hasDualFunction": true,
+      "floor": "ground",
+      "isOn": null,
+      "polledAt": null,
       "controllers": [
-        {"switchId": "kylpyhuone-2", "switchName": "Kylpyhuone 2", "functionNumber": 1},
+        {"switchId": "kylpyhuone-2", "switchName": "Kylpyhuone 2", "functionNumber": 1}
       ],
-      "isOn": false,
-      "isOn2": null,
-      "polledAt": "2025-01-15T10:23:05.000Z",
       "href": "/api/lights/sauna-laude-ledi"
     }
-  ]
+  ],
+  "_links": {
+    "self": "/api/lights",
+    "polling": "/api/polling/status"
+  }
 }
 ```
 
-`isOn` and `isOn2` are `null` until the background poller has queried the light at least once. `hasDualFunction` means the light is also reachable via a second-press function on at least one of its switches.
+`isOn` and `polledAt` are `null` until the background poller has queried the light at least once.
 
 ### Get Light Status (live)
 ```bash
@@ -150,8 +153,10 @@ curl http://localhost:8080/api/lights/kylpyhuone
 {
   "id": "kylpyhuone",
   "name": "Kylpyhuone",
+  "floor": "ground",
   "isOn": true,
-  "hasDualFunction": false,
+  "polledAt": "2025-01-15T10:23:00.000Z",
+  "source": "cache",
   "controllers": [
     {"switchId": "kylpyhuone-1", "switchName": "Kylpyhuone 1", "functionNumber": 1}
   ],
@@ -281,11 +286,47 @@ wago-webvisu-adapter/
 │   ├── polling-service.ts       # Background light status poller
 │   ├── database.ts              # SQLite status cache
 │   ├── index.ts                 # Main entry point
-│   └── protocol/
-│       ├── binary.ts            # MBUI/TLV/Frame binary primitives
-│       ├── messages.ts          # Request builders + response parsers
-│       ├── paint-commands.ts    # Paint command parser, status color extraction
-│       └── client.ts            # Stateful protocol HTTP client
+│   ├── commands/
+│   │   ├── ensure-dropdown-closed.ts
+│   │   ├── navigate-to-tab.ts
+│   │   ├── open-dropdown.ts
+│   │   ├── resolve-light-status.ts
+│   │   ├── scroll-to-target.ts
+│   │   └── select-dropdown-item.ts
+│   ├── model/
+│   │   ├── command-context.ts   # CommandContext interface
+│   │   ├── dropdown-detection.ts
+│   │   ├── dropdown-labels.ts   # Majority-vote dropdown position detection
+│   │   ├── header-verification.ts
+│   │   ├── lamp-ids.ts
+│   │   ├── scroll-settle.ts
+│   │   ├── text-utils.ts
+│   │   ├── touch-validation.ts
+│   │   ├── ui-state.ts          # UIState + DropdownView
+│   │   └── wait-for-dropdown.ts
+│   ├── protocol/
+│   │   ├── binary.ts            # MBUI/TLV/Frame binary primitives
+│   │   ├── client.ts            # Stateful protocol HTTP client
+│   │   ├── command-ids.ts       # CMD_* constants (single source of truth)
+│   │   ├── command-registry.ts  # All 107 paint command names
+│   │   ├── frame-classifier.ts  # Paint frame classifier
+│   │   ├── messages.ts          # Request builders + response parsers
+│   │   └── paint-commands.ts    # Paint command parser, status color extraction
+│   ├── renderer/
+│   │   ├── debug-renderer.ts    # Multi-layer pixel renderer, PNG output
+│   │   ├── geometry.ts          # Rect parsing, clip intersection
+│   │   ├── gradient.ts          # Gradient fill support
+│   │   ├── image-commands.ts    # PLC image fetch + decode
+│   │   ├── pixel-surface.ts     # RGBA pixel buffer with drawing primitives
+│   │   ├── png-encoder.ts       # Raw RGBA → PNG encoding
+│   │   ├── shape-commands.ts    # DrawPrimitive, Fill3DRect, DrawPolygon, DrawPixels
+│   │   ├── state-parsers.ts     # SetFillColor, SetPenStyle, SetFont, SelectLayer…
+│   │   ├── text-commands.ts     # DrawText via SVG/Resvg
+│   │   └── types.ts
+│   └── events/
+│       ├── event-builders.ts    # Mouse event builders
+│       ├── event-types.ts
+│       └── index.ts
 ├── mcp-server/
 │   ├── server.py                # Python MCP server
 │   ├── requirements.txt
