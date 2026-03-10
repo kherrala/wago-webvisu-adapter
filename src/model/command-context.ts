@@ -33,4 +33,5 @@ export interface CommandContext {
   readonly window: CommandWindow;
   pollPaintCommands(reason: string): Promise<PaintCommand[]>;
   delay(ms: number): Promise<void>;
+  captureDebugSnapshot(label: string, markers?: Array<{ x: number; y: number; type: 'down' | 'up' | 'click'; label?: string }>): Promise<void>;
 }

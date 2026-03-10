@@ -58,6 +58,20 @@ async function saveRenderedUi(label: string): Promise<void> {
   }
 }
 
+// Save all debug snapshots collected during the test
+function saveCollectedSnapshots(testName: string): void {
+  try {
+    const snapshots = (controller as any).collectAndClearSnapshots?.() ?? [];
+    for (const snap of snapshots) {
+      const filename = path.join(OUTPUT_DIR, `${testName}-${snap.label}.png`);
+      fs.writeFileSync(filename, snap.png);
+      console.log(`  ${BLUE}[UI → ${path.basename(filename)}]${RESET}`);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 // Attempt to dismiss a numeric keypad dialog if one has opened by accident.
 // The keypad appears when a misclick lands on a numeric input field and can
 // block all subsequent interactions.
@@ -97,7 +111,8 @@ async function runTest(
     const r: TestResult = { name, passed: true, skipped: false, duration, message: 'OK' };
     results.push(r);
     console.log(`  ${GREEN}✓ PASS${RESET} ${DIM}(${duration}ms)${RESET}`);
-    await saveRenderedUi(`${name}-pass`);
+    saveCollectedSnapshots(name);
+    await saveRenderedUi(name);
     return r;
   } catch (error) {
     const duration = Date.now() - start;
@@ -106,7 +121,8 @@ async function runTest(
     results.push(r);
     console.log(`  ${RED}✗ FAIL${RESET} ${DIM}(${duration}ms)${RESET}`);
     console.log(`  ${RED}  ${message}${RESET}`);
-    await saveRenderedUi(`${name}-fail`);
+    saveCollectedSnapshots(name);
+    await saveRenderedUi(name);
     // Best-effort cleanup: dismiss keypad and reset dropdown state so later
     // tests start from a clean position.
     await dismissKeypadIfVisible();

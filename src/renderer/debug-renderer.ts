@@ -85,6 +85,15 @@ import { ProtocolPaintFrame } from '../protocol/client';
 
 const logger = pino({ name: 'protocol-debug-renderer' });
 
+export interface CoordinateMarker {
+  x: number;
+  y: number;
+  /** 'down' = red, 'up' = blue, 'click' = green */
+  type: 'down' | 'up' | 'click';
+  /** Optional text label drawn next to the marker */
+  label?: string;
+}
+
 export class ProtocolDebugRenderer {
   private readonly options: ProtocolDebugRendererOptions;
   private readonly sessionDir: string;
@@ -177,11 +186,11 @@ export class ProtocolDebugRenderer {
     return Buffer.from(this.latestPng);
   }
 
-  async renderPreview(commands: PaintCommand[]): Promise<Buffer> {
+  async renderPreview(commands: PaintCommand[], markers?: CoordinateMarker[]): Promise<Buffer> {
     // Ensure queued async frame applications are reflected in preview output.
     await this.writeQueue;
     await this.applyCommands(commands);
-    const png = this.renderCurrentSurface(undefined);
+    const png = this.renderCurrentSurface(undefined, undefined, markers);
     this.latestPng = Buffer.from(png);
     return png;
   }
@@ -891,7 +900,7 @@ export class ProtocolDebugRenderer {
     };
   }
 
-  private renderCurrentSurface(eventTag?: number, eventPosition?: { x: number; y: number }): Buffer {
+  private renderCurrentSurface(eventTag?: number, eventPosition?: { x: number; y: number }, markers?: CoordinateMarker[]): Buffer {
     // Composite layers onto base surface clone.
     // Order: base (white bg) → highest layer ID first → layer 0 last (foreground on top).
     const frame = this.surface.clone();
@@ -921,6 +930,8 @@ export class ProtocolDebugRenderer {
       : frame;
 
     output.fillRect(0, 0, output.width, 4, stripe);
+
+    // Draw single event position marker (legacy per-frame marker)
     if (eventPosition) {
       const marker = { r: 245, g: 86, b: 86, a: 255 };
       const ex = eventPosition.x - (bounds?.x ?? 0);
@@ -928,7 +939,34 @@ export class ProtocolDebugRenderer {
       output.strokeRect(ex - 3, ey - 3, 7, 7, marker, 1);
       output.fillRect(ex - 1, ey - 1, 3, 3, marker);
     }
+
+    // Draw coordinate markers (for preview snapshots)
+    if (markers && markers.length > 0) {
+      const ox = bounds?.x ?? 0;
+      const oy = bounds?.y ?? 0;
+      for (const m of markers) {
+        const color = this.getMarkerColor(m.type);
+        const mx = m.x - ox;
+        const my = m.y - oy;
+        // Crosshair: 11px arms
+        output.fillRect(mx - 5, my, 11, 1, color);
+        output.fillRect(mx, my - 5, 1, 11, color);
+        // 7×7 outline square
+        output.strokeRect(mx - 3, my - 3, 7, 7, color, 1);
+        // 3×3 center dot
+        output.fillRect(mx - 1, my - 1, 3, 3, color);
+      }
+    }
+
     return encodeRgbaPng(output.width, output.height, output.pixels);
+  }
+
+  private getMarkerColor(type: 'down' | 'up' | 'click'): RgbaColor {
+    switch (type) {
+      case 'down': return { r: 230, g: 50, b: 50, a: 255 };   // red
+      case 'up':   return { r: 50, g: 100, b: 230, a: 255 };   // blue
+      case 'click': return { r: 50, g: 200, b: 80, a: 255 };   // green
+    }
   }
 
   private buildCommandHistogram(commands: PaintCommand[]): Record<number, number> {

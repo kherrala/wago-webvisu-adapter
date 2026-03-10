@@ -118,58 +118,63 @@ export async function arrowScrollOneByOne(
     direction: 'down' | 'up';
     startFirstVisible: number;
     scrollAttempt: number;
+    targetFirstVisible?: number;
+    interClickDelayMs?: number;
   },
 ): Promise<ScrollSettleResult> {
-  const { arrowX, arrowY, clickCount, direction, startFirstVisible, scrollAttempt } = options;
+  const { arrowX, arrowY, clickCount, direction, startFirstVisible, scrollAttempt, targetFirstVisible, interClickDelayMs = 100 } = options;
 
   let currentFirstVisible = startFirstVisible;
   let latestView: DropdownView | null = null;
 
   for (let i = 0; i < clickCount; i++) {
-    ctx.window.clear();
+    // No retries — duplicate clicks cause PLC click-mapping desync (PLC
+    // processes both but only updates visual once). Use a longer timeout
+    // instead to wait for slow PLC visual updates.
+    const maxClickAttempts = 1;
 
-    const clickCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
-    ctx.window.append(clickCmds);
-
-    const perClickDeadline = Date.now() + 800;
     let advanced = false;
-    let closedStreak = 0;
+    for (let attempt = 0; attempt < maxClickAttempts && !advanced; attempt++) {
+      ctx.window.clear();
 
-    while (Date.now() < perClickDeadline) {
-      const cmds = await ctx.pollPaintCommands(`arrow-click:${scrollAttempt}:${i}`);
+      const clickCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
+      ctx.window.append(clickCmds);
 
-      const classification = classifyFrame(cmds);
-      const definitelyClosed =
-        classification.dropdownClosed >= THRESHOLD_DROPDOWN_CLOSED &&
-        classification.dropdownOpen < THRESHOLD_DROPDOWN_OPEN &&
-        classification.dropdownItems.length === 0;
-      closedStreak = definitelyClosed ? closedStreak + 1 : 0;
-      if (closedStreak >= 2) {
-        return { view: latestView, closedDetected: true };
-      }
+      const perClickDeadline = Date.now() + 10000;
 
-      const freshView = resolveDropdownView(cmds);
-      const accumulatedView = resolveDropdownView(ctx.window.getCommands());
-      const view = freshView ?? accumulatedView;
+      while (Date.now() < perClickDeadline) {
+        const cmds = await ctx.pollPaintCommands(`arrow-click:${scrollAttempt}:${i}:${attempt}`);
 
-      if (view) {
-        latestView = view;
-        const movedCorrectDirection = direction === 'down'
-          ? view.firstVisible > currentFirstVisible
-          : view.firstVisible < currentFirstVisible;
-        if (movedCorrectDirection) {
-          logger.info({
-            scrollAttempt, click: i,
-            from: currentFirstVisible, to: view.firstVisible,
-          }, 'Arrow click registered');
-          currentFirstVisible = view.firstVisible;
-          advanced = true;
-          break;
+        const freshView = resolveDropdownView(cmds);
+        const accumulatedView = resolveDropdownView(ctx.window.getCommands());
+        const view = freshView ?? accumulatedView;
+
+        if (view) {
+          latestView = view;
+          const movedCorrectDirection = direction === 'down'
+            ? view.firstVisible > currentFirstVisible
+            : view.firstVisible < currentFirstVisible;
+          if (movedCorrectDirection) {
+            logger.info({
+              scrollAttempt, click: i, attempt,
+              from: currentFirstVisible, to: view.firstVisible,
+            }, 'Arrow click registered');
+            currentFirstVisible = view.firstVisible;
+            advanced = true;
+            break;
+          }
         }
+
+        const remaining = perClickDeadline - Date.now();
+        if (remaining > 0) await ctx.delay(Math.min(200, remaining));
       }
 
-      const remaining = perClickDeadline - Date.now();
-      if (remaining > 0) await ctx.delay(Math.min(80, remaining));
+      if (!advanced && attempt < maxClickAttempts - 1) {
+        logger.info({
+          scrollAttempt, click: i, attempt, currentFirstVisible,
+        }, 'Arrow click ignored by PLC — retrying');
+        await ctx.delay(500);
+      }
     }
 
     if (!advanced) {
@@ -179,8 +184,21 @@ export async function arrowScrollOneByOne(
       break;
     }
 
-    // Brief delay before next click to let PLC finish processing
-    if (i < clickCount - 1) await ctx.delay(100);
+    // Stop early if we've reached or passed the target
+    if (targetFirstVisible !== undefined) {
+      const reached = direction === 'down'
+        ? currentFirstVisible >= targetFirstVisible
+        : currentFirstVisible <= targetFirstVisible;
+      if (reached) {
+        logger.info({
+          scrollAttempt, click: i, currentFirstVisible, targetFirstVisible,
+        }, 'Target reached — stopping arrow clicks');
+        break;
+      }
+    }
+
+    // Delay before next click to let PLC finish processing
+    if (i < clickCount - 1) await ctx.delay(interClickDelayMs);
   }
 
   return { view: latestView, closedDetected: false };

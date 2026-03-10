@@ -33,6 +33,11 @@ import { waitForInitialRenderReady, navigateToNapitTab, navigateToTab as doNavig
 
 const logger = pino({ name: 'protocol-controller' });
 
+export interface DebugSnapshot {
+  label: string;
+  png: Buffer;
+}
+
 export class ProtocolController implements IWebVisuController, CommandContext {
   private static readonly RECONNECT_EMPTY_THRESHOLD = 10;
   private static readonly RECONNECT_COOLDOWN_MS = 30_000;
@@ -46,6 +51,8 @@ export class ProtocolController implements IWebVisuController, CommandContext {
   private initialized = false;
   private operationQueue: Promise<unknown> = Promise.resolve();
   private pendingOperations = 0;
+  private collectedSnapshots: DebugSnapshot[] = [];
+  private snapshotSequence = 0;
 
   constructor() {
     this.state = new UIState();
@@ -219,7 +226,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       throw new Error(`Unknown light switch: ${lightId}. Valid IDs: ${Object.keys(lightSwitches).join(', ')}`);
     }
 
-    const maxAttempts = 2;
+    const maxAttempts = 3;
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -231,17 +238,20 @@ export class ProtocolController implements IWebVisuController, CommandContext {
         const message = lastError.message ?? '';
         const isRecoverableError =
           message.includes('Scroll failed after') ||
+          message.includes('Scroll reopen failed') ||
           message.includes('Dropdown failed to open') ||
           message.includes('Dropdown failed to close') ||
-          message.includes('Dropdown not ready for item click');
+          message.includes('Dropdown not ready for item click') ||
+          message.includes('Dropdown row out of view after scroll');
 
         logger.warn({ err: lastError, lightId, attempt, maxAttempts }, 'Selection attempt failed');
 
         if (attempt < maxAttempts && (isHeaderMismatch || isRecoverableError)) {
           this.state.resetDropdown();
-          if (isRecoverableError) {
-            await this.doReconnect(`selection-failure:${lightId}:${attempt}`);
-          }
+          // Reconnect on all recoverable errors and header mismatches.
+          // Header mismatches often indicate CoDeSys click-mapping desync
+          // from scrolling — a fresh session resets internal state.
+          await this.doReconnect(`selection-failure:${lightId}:${attempt}`);
         }
       }
     }
@@ -260,14 +270,6 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     // Clear command window to avoid stale labels from previous operations
     this.window.clear();
 
-    // If target requires large backward scroll, reconnect to reset dropdown to position 0
-    const targetFirstVisible = this.state.getTargetFirstVisible(index);
-    const backwardDelta = this.state.dropdownFirstVisible - targetFirstVisible;
-    if (backwardDelta > 10) {
-      logger.info({ lightId, index, backwardDelta, currentFirstVisible: this.state.dropdownFirstVisible }, 'Large backward scroll needed; reconnecting to reset position');
-      await this.doReconnect(`backward-scroll-reset:${lightId}`);
-    }
-
     // Step 1: Ensure dropdown is closed
     await ensureDropdownClosed(this, `select-start:${lightId}`);
 
@@ -276,6 +278,9 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
     // Step 3: Scroll to target
     await scrollToTarget(this, lightId, index);
+
+    // Snapshot: after scroll settled, before click
+    await this.captureDebugSnapshot(`${lightId}-after-scroll`);
 
     // Let PLC scroll position fully stabilize before clicking
     await this.delay(500);
@@ -354,8 +359,16 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       targetLabelBottom: targetLabel?.bottom,
     }, 'Selecting dropdown item');
 
+    // Snapshot: before click with target marker
+    await this.captureDebugSnapshot(`${lightId}-before-click`, [
+      { x: rowClickX, y: itemY, type: 'click' },
+    ]);
+
     // Step 6: Selection gesture
     const selectionResult = await selectDropdownItemAndCollect(this, lightId, index, rowClickX, itemY);
+
+    // Snapshot: after click (shows header result)
+    await this.captureDebugSnapshot(`${lightId}-after-click`);
 
     // Step 7: Verify header
     verifyDropdownHeader(selectionResult.commands, lightId, index);
@@ -558,9 +571,23 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     }
   }
 
-  async getRenderedUiImage(): Promise<Buffer | null> {
+  async getRenderedUiImage(markers?: Array<{ x: number; y: number; type: 'down' | 'up' | 'click'; label?: string }>): Promise<Buffer | null> {
     if (!this.debugRenderer) return null;
-    return this.debugRenderer.renderPreview([]);
+    return this.debugRenderer.renderPreview([], markers);
+  }
+
+  async captureDebugSnapshot(label: string, markers?: Array<{ x: number; y: number; type: 'down' | 'up' | 'click'; label?: string }>): Promise<void> {
+    if (!this.debugRenderer) return;
+    this.snapshotSequence++;
+    const seq = String(this.snapshotSequence).padStart(2, '0');
+    const png = await this.debugRenderer.renderPreview([], markers);
+    this.collectedSnapshots.push({ label: `${seq}-${label}`, png: Buffer.from(png) });
+  }
+
+  collectAndClearSnapshots(): DebugSnapshot[] {
+    const result = this.collectedSnapshots;
+    this.collectedSnapshots = [];
+    return result;
   }
 
   async isConnected(): Promise<boolean> {

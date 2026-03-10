@@ -7,6 +7,13 @@ export interface LightStatus {
   isOn2?: boolean;
 }
 
+export interface CoordinateMarkerSpec {
+  x: number;
+  y: number;
+  type: 'down' | 'up' | 'click';
+  label?: string;
+}
+
 export interface IWebVisuController {
   initialize(): Promise<void>;
   close(): Promise<void>;
@@ -16,7 +23,7 @@ export interface IWebVisuController {
   getAllLights(): Promise<LightStatus[]>;
   navigateToTab(tabName: string): Promise<void>;
   takeScreenshot(): Promise<Buffer>;
-  getRenderedUiImage?(): Promise<Buffer | null>;
+  getRenderedUiImage?(markers?: CoordinateMarkerSpec[]): Promise<Buffer | null>;
   isConnected(): Promise<boolean>;
   getPendingOperationCount(): number;
   resetDropdownState(): void;
