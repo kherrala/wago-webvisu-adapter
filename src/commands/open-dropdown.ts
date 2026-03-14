@@ -28,12 +28,9 @@ export async function openDropdown(
 
   // Check accumulated commands for open detection
   // (PLC renders dropdown labels progressively across multiple frames)
-  // Use shorter timeout (3s) for first attempt — if it was a toggle-close,
-  // we want to retry quickly rather than wait the full 6s.
   let openDetected = isDropdownOpen(ctx.window.getCommands());
   if (!openDetected) {
-    const firstAttemptTimeout = Math.min(3000, dropdownOpenTimeoutMs);
-    const deadline = Date.now() + firstAttemptTimeout;
+    const deadline = Date.now() + dropdownOpenTimeoutMs;
     let poll = 0;
     while (Date.now() < deadline) {
       poll++;
