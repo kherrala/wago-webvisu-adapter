@@ -44,6 +44,31 @@ export async function openDropdown(
     }
   }
 
+  // If the first click didn't open the dropdown, it may have CLOSED it instead
+  // (the PLC had the dropdown open internally from the previous operation, but
+  // ensureDropdownClosed couldn't detect it). A second click reopens it.
+  if (!openDetected) {
+    logger.warn({ lightId }, 'First click did not open dropdown — retrying (likely toggled closed)');
+    ctx.window.clear();
+    const retryCommands = await ctx.client.pressAndCollect(arrowX, arrowY);
+    ctx.window.append(retryCommands);
+    openDetected = isDropdownOpen(ctx.window.getCommands());
+    if (!openDetected) {
+      const retryDeadline = Date.now() + dropdownOpenTimeoutMs;
+      let retryPoll = 0;
+      while (Date.now() < retryDeadline) {
+        retryPoll++;
+        await ctx.pollPaintCommands(`dropdown-open-retry:${retryPoll}:${lightId}`);
+        if (isDropdownOpen(ctx.window.getCommands())) {
+          openDetected = true;
+          break;
+        }
+        const remaining = retryDeadline - Date.now();
+        if (remaining > 0) await ctx.delay(Math.min(200, remaining));
+      }
+    }
+  }
+
   if (!openDetected) {
     throw new Error(`Dropdown failed to open for light=${lightId}`);
   }
