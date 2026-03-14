@@ -121,7 +121,7 @@ export async function scrollToTarget(
 
   const syncStart = Date.now();
   const syncDeadline = syncStart + 18000;
-  const minSyncMs = 0; // No floor — rely on syncMoved + 8 stable polls
+  const minSyncMs = 500; // Small floor to avoid accepting very early transients
   let lastSyncFv: number | null = null;
   let syncStable = 0;
   let syncMoved = false;
@@ -151,7 +151,7 @@ export async function scrollToTarget(
       if (view.firstVisible === lastSyncFv) {
         syncStable++;
         const elapsed = Date.now() - syncStart;
-        if (syncMoved && syncStable >= 8 && elapsed >= minSyncMs) break;
+        if (syncMoved && syncStable >= 3 && elapsed >= minSyncMs) break;
       } else {
         syncStable = 1;
         lastSyncFv = view.firstVisible;
