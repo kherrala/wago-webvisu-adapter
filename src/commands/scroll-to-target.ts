@@ -1,6 +1,8 @@
 import { uiCoordinates } from '../config';
 import { CommandContext } from '../model/command-context';
+import { resolveDropdownView } from '../model/dropdown-labels';
 import { arrowScrollOneByOne } from '../model/scroll-settle';
+import { classifyFrame, THRESHOLD_DROPDOWN_CLOSED, THRESHOLD_DROPDOWN_OPEN } from '../protocol/frame-classifier';
 import { reopenDropdownFromClosed } from './ensure-dropdown-closed';
 import pino from 'pino';
 
@@ -53,20 +55,18 @@ async function dragToPosition(
 /**
  * Scroll the dropdown to make `index` visible.
  *
- * Three-phase approach based on CoDeSys PLC dropdown dual-state architecture:
+ * Two-phase approach based on CoDeSys PLC dropdown dual-state architecture:
  *
  * Phase 1 — Drag to set widget position:
  *   The drag only changes the widget (click-mapping) state, not the visual.
  *   The drag also "activates" the scrollbar widget — without a prior drag,
  *   arrow clicks only advance the visual, not the widget.
  *
- * Phase 2 — One arrow-down to sync visual to widget:
- *   The first arrow-down from desynced state (visual≠widget) syncs the
- *   visual to the widget position.
- *
- * Phase 2.5 — One arrow-UP to re-align widget with visual:
- *   After drag + arrow-down sync, the PLC's widget may be 1 ahead of
- *   the visual. One arrow-UP from this state re-synchronizes both.
+ * Phase 2 — Combined arrow-down + arrow-up to sync and re-align:
+ *   Arrow-down syncs visual to widget, arrow-up re-aligns widget with
+ *   visual (fixes +1 offset). Both clicks sent rapidly (500ms apart),
+ *   then a single poll window waits for the visual to settle (~12-15s).
+ *   Continuous polling keeps the PLC's widget synchronized.
  *
  * Phase 3 — Arrow-UP clicks for fine adjustment:
  *   Arrow-UP from synced state decreases both visual and widget equally
@@ -103,61 +103,79 @@ export async function scrollToTarget(
 
   await dragToPosition(ctx, dragTarget, lightId);
 
-  // Phase 2: One arrow-down to sync visual to widget.
+  // Combined Phase 2 + 2.5: Send arrow-down (sync visual to widget) and
+  // arrow-up (re-align widget) clicks rapidly, then poll once for the visual
+  // to settle. This overlaps PLC processing of both clicks — instead of
+  // sequential polling (Phase 2 ~7s + Phase 2.5 ~15s = ~22s), a single
+  // poll window handles both (~12-15s).
   const downBtn = scrollbarConfig.arrowDown;
-  const syncResult = await arrowScrollOneByOne(ctx, {
-    arrowX: downBtn.x,
-    arrowY: downBtn.y,
-    clickCount: 1,
-    direction: 'down',
-    startFirstVisible: ctx.state.dropdownFirstVisible,
-    scrollAttempt: 0,
-  });
-  if (syncResult.view) {
-    ctx.state.applyDropdownView(syncResult.view);
-    ctx.state.widgetScrollPosition = syncResult.view.firstVisible;
-    logger.info({
-      lightId, firstVisible: syncResult.view.firstVisible, dragTarget,
-    }, 'Visual synced after drag');
+  const upBtn = scrollbarConfig.arrowUp;
+  const startFv = ctx.state.dropdownFirstVisible;
+
+  ctx.window.clear();
+  const downCmds = await ctx.client.pressAndCollect(downBtn.x, downBtn.y);
+  ctx.window.append(downCmds);
+  await ctx.delay(500);
+  const upCmds = await ctx.client.pressAndCollect(upBtn.x, upBtn.y);
+  ctx.window.append(upCmds);
+
+  const syncStart = Date.now();
+  const syncDeadline = syncStart + 18000;
+  const minSyncMs = 10000; // Both clicks need ~10s to be fully rendered
+  let lastSyncFv: number | null = null;
+  let syncStable = 0;
+  let syncMoved = false;
+  let syncView: ReturnType<typeof resolveDropdownView> = null;
+  let closedStreak = 0;
+  let syncClosed = false;
+
+  while (Date.now() < syncDeadline) {
+    const cmds = await ctx.pollPaintCommands(`combined-sync:${lightId}`);
+
+    const classification = classifyFrame(cmds);
+    const definitelyClosed =
+      classification.dropdownClosed >= THRESHOLD_DROPDOWN_CLOSED &&
+      classification.dropdownOpen < THRESHOLD_DROPDOWN_OPEN &&
+      classification.dropdownItems.length === 0;
+    closedStreak = definitelyClosed ? closedStreak + 1 : 0;
+    if (closedStreak >= 2) { syncClosed = true; break; }
+
+    const freshView = resolveDropdownView(cmds);
+    const accView = resolveDropdownView(ctx.window.getCommands());
+    const view = freshView ?? accView;
+
+    if (view) {
+      syncView = view;
+      if (view.firstVisible !== startFv) syncMoved = true;
+
+      if (view.firstVisible === lastSyncFv) {
+        syncStable++;
+        const elapsed = Date.now() - syncStart;
+        if (syncMoved && syncStable >= 8 && elapsed >= minSyncMs) break;
+      } else {
+        syncStable = 1;
+        lastSyncFv = view.firstVisible;
+      }
+    }
+
+    const remaining = syncDeadline - Date.now();
+    if (remaining > 0) await ctx.delay(Math.min(150, remaining));
   }
 
-  if (syncResult.closedDetected) {
-    logger.warn({ lightId }, 'Dropdown closed during sync arrow-down');
+  if (syncClosed) {
+    logger.warn({ lightId }, 'Dropdown closed during combined sync');
     const { view } = await reopenDropdownFromClosed(ctx, `sync-reopen:${lightId}`);
     if (view) ctx.state.applyDropdownView(view);
-    return; // Caller will retry the full operation
+    return;
   }
 
-  // Phase 2.5: Arrow-UP to re-align widget with visual.
-  // After drag + arrow-down sync, the PLC's widget (click-mapping) position
-  // may be 1 ahead of the visual. One arrow-UP re-aligns the widget to match
-  // the visual. The visual may transiently increase (D→D+1) then settle back
-  // to D. The polling duration must be long enough for this round-trip.
-  // Continuous polling (heartbeats) keeps the PLC's widget synchronized.
-  if (ctx.state.dropdownFirstVisible > 0) {
-    const upBtn = scrollbarConfig.arrowUp;
-    const resyncResult = await arrowScrollOneByOne(ctx, {
-      arrowX: upBtn.x,
-      arrowY: upBtn.y,
-      clickCount: 1,
-      direction: 'up',
-      startFirstVisible: ctx.state.dropdownFirstVisible,
-      scrollAttempt: 0,
-      perClickTimeoutMs: 15000,
-    });
-    if (resyncResult.closedDetected) {
-      logger.warn({ lightId }, 'Dropdown closed during resync arrow-up');
-      const { view } = await reopenDropdownFromClosed(ctx, `resync-reopen:${lightId}`);
-      if (view) ctx.state.applyDropdownView(view);
-      return;
-    }
-    if (resyncResult.view) {
-      ctx.state.applyDropdownView(resyncResult.view);
-      ctx.state.widgetScrollPosition = resyncResult.view.firstVisible;
-      logger.info({
-        lightId, firstVisible: resyncResult.view.firstVisible,
-      }, 'Post-sync arrow-UP re-alignment');
-    }
+  if (syncView) {
+    ctx.state.applyDropdownView(syncView);
+    ctx.state.widgetScrollPosition = syncView.firstVisible;
+    logger.info({
+      lightId, firstVisible: syncView.firstVisible, dragTarget,
+      elapsed: Date.now() - syncStart,
+    }, 'Visual settled after combined sync');
   }
 
   if (ctx.state.isDropdownIndexVisible(index)) return;
