@@ -144,6 +144,47 @@ PaintCommand[] → applyCommands() → PixelSurface(s) → renderCurrentSurface(
 - **Misclick recovery** = may open keypad dialog (close with ESC) or press "Ohjaus" button
 - Wait for draw commands — forcing redraws is not necessary
 
+## PLC Dropdown Widget Internals (Empirically Verified)
+
+The CoDeSys PLC dropdown maintains **two independent scroll states** that can desync:
+
+### Dual-State Architecture
+
+1. **Visual state** (per-client rendering): Controls what the user sees — which labels are drawn, where the scrollbar thumb appears. Resets to `firstVisible=0` every time the dropdown is opened.
+
+2. **Widget state** (global click mapping): Controls which item index a click at a given row maps to. Persists globally — survives dropdown close/reopen AND full reconnects (disconnect + new handshake). Set by the most recent scroll interaction that the PLC acknowledged.
+
+### Scrollbar Thumb Position
+
+The scrollbar thumb follows the **visual state**, not the widget state. After opening a dropdown, the thumb is always at `topY` (174) regardless of where the widget state thinks the scroll position is.
+
+### Arrow Click Behavior
+
+- Arrow clicks advance **both** visual and widget states **only when they start in sync**.
+- When visual and widget states are desynced, arrow clicks advance **only the visual state** — the widget (click mapping) does not move.
+- After no-scroll item selections (clicking an item without scrolling first), arrow clicks may produce **no visual change at all** in certain conditions. A reconnect clears this stuck state.
+
+### Scrollbar Drag Behavior
+
+- A drag from the thumb's actual position (visual position) to a target Y sets an **absolute scroll position**. This affects both visual and widget states.
+- Drag precision is approximate — targeting `firstVisible=9` may land at `firstVisible=8` (off-by-1).
+- After a drag, closing and reopening the dropdown resets visual to `firstVisible=0` — it does **not** reveal the drag's actual landing position. The only way to observe the drag result is through subsequent arrow click behavior (first arrow click jumps to the drag position).
+
+### Widget State Persistence
+
+The widget scroll position is **truly global** — it persists:
+- Across dropdown close/reopen cycles
+- Across full WebSocket reconnects (disconnect + new handshake)
+- Across different client sessions
+
+This means a new session inherits whatever widget position the last session left behind.
+
+### Implications for Scroll Strategy
+
+- Pure arrow scrolling only works reliably from a known-synced state (fresh session with no prior scroll history, or immediately after a drag that syncs both states).
+- Scrollbar drag is the only reliable way to set an absolute position, but the off-by-1 imprecision requires either tolerant clicking or fine adjustment.
+- The original browser-based WebVisu client avoids these issues because it runs in a continuous session where visual and widget states stay naturally in sync through user interaction.
+
 ## Acceptance Tests
 
 11 tests in `src/test-acceptance.ts`: connect → navigate → dropdown open → scroll → click → verify header → read status. Covers arrow scroll, drag scroll, backward drag, large jumps, sequential polling. Saves PNG snapshots on failure to `data/acceptance-test-results/`.

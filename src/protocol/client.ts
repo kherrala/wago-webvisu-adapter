@@ -465,7 +465,9 @@ export class WebVisuProtocolClient {
   async click(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
 
-    // Skip mouseMove if already at the target position (saves ~1s HTTP round-trip).
+    // Send mouseMove before mouseDown when coordinates differ — matching real
+    // browser behavior where mouseMove only fires when the cursor actually moves.
+    // Sending redundant mouseMove to the same position confuses PLC widget state.
     if (x !== this.lastMouseX || y !== this.lastMouseY) {
       await this.mouseMove(x, y);
     }
@@ -492,7 +494,6 @@ export class WebVisuProtocolClient {
   async clickAndCollect(x: number, y: number): Promise<PaintCommand[]> {
     this.ensureConnected();
 
-    // Skip mouseMove if already at the target position.
     if (x !== this.lastMouseX || y !== this.lastMouseY) {
       await this.mouseMove(x, y);
     }
@@ -528,7 +529,6 @@ export class WebVisuProtocolClient {
   async pressAndCollectDetailed(x: number, y: number): Promise<{ downCommands: PaintCommand[]; upCommands: PaintCommand[] }> {
     this.ensureConnected();
 
-    // Skip mouseMove if already at the target position.
     if (x !== this.lastMouseX || y !== this.lastMouseY) {
       await this.mouseMove(x, y);
     }
@@ -600,6 +600,11 @@ export class WebVisuProtocolClient {
 
   async mouseDown(x: number, y: number): Promise<PaintDataResponse> {
     this.ensureConnected();
+    // Send mouseMove before mouseDown when coords differ — needed for drag start
+    // on the scrollbar handle, which is at a different position than the last event.
+    if (x !== this.lastMouseX || y !== this.lastMouseY) {
+      await this.mouseMove(x, y);
+    }
     const { paintData } = await this.sendEventAndCollect(
       buildMouseDown(this.clientId, x, y, this.sessionId)
     );

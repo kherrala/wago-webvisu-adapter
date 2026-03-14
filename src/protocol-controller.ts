@@ -364,6 +364,14 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       { x: rowClickX, y: itemY, type: 'click' },
     ]);
 
+    // Step 5.5: Move mouse to list area before item click.
+    // After arrow scrolling, the mouse is on the scrollbar widget. The PLC's
+    // dropdown list sub-widget may need a mouseMove within its area to sync
+    // its click mapping with the scrollbar's scroll position. In a browser,
+    // the mouse naturally passes through the list before clicking an item.
+    await this.client.mouseMove(rowClickX, dropdownConfig.firstItemY);
+    await this.delay(200);
+
     // Step 6: Selection gesture
     const selectionResult = await selectDropdownItemAndCollect(this, lightId, index, rowClickX, itemY);
 
@@ -372,6 +380,10 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
     // Step 7: Verify header
     verifyDropdownHeader(selectionResult.commands, lightId, index);
+
+    // Track the widget's scroll position — it persists globally and determines
+    // where the scrollbar thumb is on next dropdown open.
+    this.state.widgetScrollPosition = this.state.dropdownFirstVisible;
 
     logger.info(`Light switch ${lightId} selected`);
     return { postSelectionCommands: selectionResult.commands };

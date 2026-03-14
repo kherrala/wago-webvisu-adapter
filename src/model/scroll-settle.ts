@@ -140,7 +140,10 @@ export async function arrowScrollOneByOne(
       const clickCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
       ctx.window.append(clickCmds);
 
-      const perClickDeadline = Date.now() + 10000;
+      // PLC arrow click visual updates take 7–10s under load; 10s timeout
+      // causes phantom stalls where the click IS processed but the render
+      // arrives just after the deadline, creating click-mapping desync.
+      const perClickDeadline = Date.now() + 20000;
 
       while (Date.now() < perClickDeadline) {
         const cmds = await ctx.pollPaintCommands(`arrow-click:${scrollAttempt}:${i}:${attempt}`);
@@ -202,4 +205,121 @@ export async function arrowScrollOneByOne(
   }
 
   return { view: latestView, closedDetected: false };
+}
+
+/**
+ * Send all arrow clicks rapidly without waiting for visual confirmation
+ * between each click, then wait for the visual to stabilize.
+ *
+ * Much faster than one-by-one for large deltas: sending N clicks takes
+ * ~N*100ms, then a single settle wait of ~10-15s. Compared to one-by-one
+ * which takes N * 7-10s (7-10s per click for PLC render).
+ *
+ * The trade-off: if some clicks are lost, we end up short of the target.
+ * The caller should retry with the remaining delta.
+ */
+export async function batchArrowScroll(
+  ctx: CommandContext,
+  options: {
+    arrowX: number;
+    arrowY: number;
+    clickCount: number;
+    direction: 'down' | 'up';
+    startFirstVisible: number;
+    targetFirstVisible: number;
+    scrollAttempt: number;
+  },
+): Promise<ScrollSettleResult> {
+  const { arrowX, arrowY, clickCount, direction, startFirstVisible, targetFirstVisible, scrollAttempt } = options;
+
+  // Phase 1: Send all clicks with moderate pacing.
+  // Too fast (80ms) causes PLC visual/click-mapping desync.
+  // Too slow (7s one-by-one) is impractical for large deltas.
+  // 500ms gives the PLC time to process each click internally
+  // (the actual render takes longer but happens in the background).
+  const interClickMs = 500;
+  logger.info({
+    scrollAttempt, clickCount, direction, startFirstVisible, targetFirstVisible,
+    interClickMs,
+  }, 'Batch sending arrow clicks');
+
+  for (let i = 0; i < clickCount; i++) {
+    await ctx.client.pressAndCollect(arrowX, arrowY);
+    if (i < clickCount - 1) await ctx.delay(interClickMs);
+  }
+
+  // Phase 2: Wait for visual to stabilize at the final position.
+  // The PLC processes each click sequentially (~7s each for rendering).
+  // We must wait for the position to CHANGE from startFirstVisible before
+  // counting stability — otherwise we falsely declare "stable" at the old
+  // position while the PLC is still processing.
+  ctx.window.clear();
+  const deadline = Date.now() + 60000;
+  let stableCount = 0;
+  let lastFirstVisible: number | null = null;
+  let bestView: DropdownView | null = null;
+  let closedStreak = 0;
+  let poll = 0;
+  let everMoved = false;
+
+  // Require more stable polls before the position has moved (to avoid
+  // declaring stable at the starting position while PLC is still processing).
+  const requiredStableBeforeMove = 8;
+  const requiredStableAfterMove = 3;
+
+  while (Date.now() < deadline) {
+    poll++;
+    const cmds = await ctx.pollPaintCommands(`batch-arrow-settle:${scrollAttempt}:${poll}`);
+
+    const classification = classifyFrame(cmds);
+    const definitelyClosed =
+      classification.dropdownClosed >= THRESHOLD_DROPDOWN_CLOSED &&
+      classification.dropdownOpen < THRESHOLD_DROPDOWN_OPEN &&
+      classification.dropdownItems.length === 0;
+    closedStreak = definitelyClosed ? closedStreak + 1 : 0;
+    if (closedStreak >= 2) {
+      return { view: bestView, closedDetected: true };
+    }
+
+    const freshView = resolveDropdownView(cmds);
+    const accumulatedView = resolveDropdownView(ctx.window.getCommands());
+    const currentView = freshView ?? accumulatedView;
+
+    if (currentView) {
+      bestView = currentView;
+
+      if (currentView.firstVisible !== startFirstVisible) {
+        everMoved = true;
+      }
+
+      if (currentView.firstVisible === lastFirstVisible) {
+        stableCount++;
+        const threshold = everMoved ? requiredStableAfterMove : requiredStableBeforeMove;
+        if (stableCount >= threshold) {
+          logger.info({
+            scrollAttempt, poll, firstVisible: currentView.firstVisible,
+            targetFirstVisible, clickCount, everMoved,
+          }, 'Batch arrow scroll stable');
+          return { view: currentView, closedDetected: false };
+        }
+      } else {
+        stableCount = 1;
+        lastFirstVisible = currentView.firstVisible;
+      }
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await ctx.delay(Math.min(150, remaining));
+  }
+
+  if (bestView) {
+    logger.warn({
+      scrollAttempt, firstVisible: bestView.firstVisible,
+      targetFirstVisible, poll, everMoved,
+    }, 'Batch arrow settle timed out; using best view');
+  } else {
+    logger.warn({ scrollAttempt, poll }, 'Batch arrow settle timed out with no view');
+  }
+
+  return { view: bestView, closedDetected: false };
 }

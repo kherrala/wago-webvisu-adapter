@@ -21,6 +21,31 @@ import {
   packPoint,
 } from './event-types';
 
+/**
+ * Build TLV tag 2 extra data for canvas mouse events.
+ *
+ * The original WebVisu client sends this with every mouse event:
+ * - 8 bytes: Visualization target (UInt64 encoding page container hierarchy)
+ * - 4 bytes: Binary coordinates (int16 LE x, int16 LE y)
+ *
+ * Without this data, the PLC updates the visual rendering state but may not
+ * synchronize widget interaction state (e.g., dropdown click mapping falls
+ * out of sync with scroll position after arrow clicks).
+ *
+ * Reference: webvisu-deobfuscated.js cy() (line 4680), Util.$e() (line 11738)
+ */
+function buildMouseEventExtraData(x: number, y: number): Uint8Array {
+  const buf = new Uint8Array(12);
+  const dv = new DataView(buf.buffer);
+  // Bytes 0-7: Visualization target UInt64(0, 0) — flat page, no dialogs
+  dv.setUint32(0, 0, true);   // .kb (low 32 bits)
+  dv.setUint32(4, 0, true);   // .zb (high 32 bits)
+  // Bytes 8-11: Binary coordinates (same coords as param1, different encoding)
+  dv.setInt16(8, x, true);    // int16 LE x
+  dv.setInt16(10, y, true);   // int16 LE y
+  return buf;
+}
+
 function buildEventPayload(
   tag: number,
   clientId: number,
@@ -67,27 +92,27 @@ export function buildHeartbeat(clientId: number, sessionId: number): ArrayBuffer
 }
 
 export function buildMouseDown(clientId: number, x: number, y: number, sessionId: number): ArrayBuffer {
-  const payload = buildEventPayload(EVENT_MOUSE_DOWN, clientId, packPoint(x, y), 0);
+  const payload = buildEventPayload(EVENT_MOUSE_DOWN, clientId, packPoint(x, y), 0, buildMouseEventExtraData(x, y));
   return buildGetPaintData(payload, sessionId);
 }
 
 export function buildMouseMove(clientId: number, x: number, y: number, sessionId: number): ArrayBuffer {
-  const payload = buildEventPayload(EVENT_MOUSE_MOVE, clientId, packPoint(x, y), 0);
+  const payload = buildEventPayload(EVENT_MOUSE_MOVE, clientId, packPoint(x, y), 0, buildMouseEventExtraData(x, y));
   return buildGetPaintData(payload, sessionId);
 }
 
 export function buildMouseUp(clientId: number, x: number, y: number, sessionId: number): ArrayBuffer {
-  const payload = buildEventPayload(EVENT_MOUSE_UP, clientId, packPoint(x, y), 0);
+  const payload = buildEventPayload(EVENT_MOUSE_UP, clientId, packPoint(x, y), 0, buildMouseEventExtraData(x, y));
   return buildGetPaintData(payload, sessionId);
 }
 
 export function buildMouseClick(clientId: number, x: number, y: number, sessionId: number): ArrayBuffer {
-  const payload = buildEventPayload(EVENT_MOUSE_CLICK, clientId, packPoint(x, y), 0);
+  const payload = buildEventPayload(EVENT_MOUSE_CLICK, clientId, packPoint(x, y), 0, buildMouseEventExtraData(x, y));
   return buildGetPaintData(payload, sessionId);
 }
 
 export function buildMouseDoubleClick(clientId: number, x: number, y: number, sessionId: number): ArrayBuffer {
-  const payload = buildEventPayload(EVENT_MOUSE_DBL_CLICK, clientId, packPoint(x, y), 0);
+  const payload = buildEventPayload(EVENT_MOUSE_DBL_CLICK, clientId, packPoint(x, y), 0, buildMouseEventExtraData(x, y));
   return buildGetPaintData(payload, sessionId);
 }
 

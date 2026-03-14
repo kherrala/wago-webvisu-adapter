@@ -7,6 +7,15 @@ import pino from 'pino';
 
 const logger = pino({ name: 'ensure-dropdown-closed' });
 
+/**
+ * Close the dropdown if it's open. Clicks the dropdown arrow at most ONCE
+ * to avoid toggle storms — clicking multiple times rapidly toggles the
+ * dropdown open/close/open/close, corrupting the PLC's internal state.
+ *
+ * After clicking, waits up to 3s for close confirmation. If the dropdown
+ * appears already closed (no open signals for 2 consecutive polls), returns
+ * immediately without clicking.
+ */
 export async function ensureDropdownClosed(
   ctx: CommandContext,
   reason: string,
@@ -17,55 +26,145 @@ export async function ensureDropdownClosed(
   // Clear window for fresh close detection
   ctx.window.clear();
 
-  const deadline = Date.now() + 4500;
-  let poll = 0;
+  // Phase 1: Check if already closed (up to 1s)
+  const probeDeadline = Date.now() + 1000;
   let notOpenStreak = 0;
-  while (Date.now() < deadline) {
+  let poll = 0;
+  let openSeen = false;
+  while (Date.now() < probeDeadline) {
     poll++;
     const probeCmds = await ctx.pollPaintCommands(`dropdown-close-probe:${reason}:${poll}`);
 
-    // Check fresh poll for definitive close
     if (isDropdownDefinitivelyClosed(probeCmds)) return;
 
-    // Check accumulated commands — handles progressive rendering
     const accumulated = ctx.window.getCommands();
     if (isDropdownDefinitivelyClosed(accumulated) && !isDropdownOpen(accumulated)) return;
 
-    // Track consecutive polls that don't show open signals
     if (!isDropdownOpen(probeCmds)) {
       notOpenStreak++;
-      // Two consecutive "not open" fresh polls → assume closed
+      if (notOpenStreak >= 2) return;
+    } else {
+      notOpenStreak = 0;
+      openSeen = true;
+      break; // Confirmed open — proceed to click
+    }
+
+    const remaining = probeDeadline - Date.now();
+    if (remaining > 0) await ctx.delay(Math.min(120, remaining));
+  }
+
+  if (!openSeen) return; // No open signal seen — assume closed
+
+  // Phase 2: Single click to close
+  logger.info({ reason, poll }, 'Dropdown appears open; clicking arrow to close');
+  ctx.window.clear();
+  const clickCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
+  ctx.window.append(clickCmds);
+  if (isDropdownDefinitivelyClosed(clickCmds)) return;
+
+  // Phase 3: Wait for close confirmation (up to 3s)
+  // Do NOT click again — a second click would reopen the dropdown.
+  const closeDeadline = Date.now() + 3000;
+  notOpenStreak = 0;
+  while (Date.now() < closeDeadline) {
+    poll++;
+    const waitCmds = await ctx.pollPaintCommands(`dropdown-close-wait:${reason}:${poll}`);
+    if (isDropdownDefinitivelyClosed(waitCmds)) return;
+
+    const postClickAccum = ctx.window.getCommands();
+    if (isDropdownDefinitivelyClosed(postClickAccum) && !isDropdownOpen(postClickAccum)) return;
+
+    if (!isDropdownOpen(waitCmds)) {
+      notOpenStreak++;
       if (notOpenStreak >= 2) return;
     } else {
       notOpenStreak = 0;
     }
 
-    // Only click to close if fresh poll actually shows dropdown open
-    if (isDropdownOpen(probeCmds)) {
-      logger.info({ reason, poll }, 'Dropdown appears open; clicking arrow to close');
-      ctx.window.clear();
-      const clickCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
-      ctx.window.append(clickCmds);
-      if (isDropdownDefinitivelyClosed(clickCmds)) return;
-
-      const postClickDeadline = Date.now() + 900;
-      while (Date.now() < postClickDeadline) {
-        const waitCmds = await ctx.pollPaintCommands(`dropdown-close-wait:${reason}:${poll}`);
-        if (isDropdownDefinitivelyClosed(waitCmds)) return;
-        // Check accumulated since click
-        const postClickAccum = ctx.window.getCommands();
-        if (isDropdownDefinitivelyClosed(postClickAccum) && !isDropdownOpen(postClickAccum)) return;
-        const remainingPostClick = postClickDeadline - Date.now();
-        if (remainingPostClick > 0) await ctx.delay(Math.min(120, remainingPostClick));
-      }
-      notOpenStreak = 0;
-    }
-
-    const remaining = deadline - Date.now();
-    if (remaining > 0) await ctx.delay(Math.min(120, remaining));
+    const remaining = closeDeadline - Date.now();
+    if (remaining > 0) await ctx.delay(Math.min(150, remaining));
   }
 
   throw new Error(`Dropdown failed to close: ${reason}`);
+}
+
+/**
+ * Close and reopen the dropdown to sync visual and click mapping after a drag.
+ * Uses a fixed delay instead of polling for close confirmation — the PLC
+ * often takes >3s to render definitive close signals after a scrollbar drag,
+ * making detection-based close unreliable.
+ */
+export async function closeAndReopenForDragSync(
+  ctx: CommandContext,
+  reason: string,
+): Promise<{
+  view: DropdownView | null;
+}> {
+  const arrowX = uiCoordinates.lightSwitches.dropdownArrow.x;
+  const arrowY = uiCoordinates.lightSwitches.dropdownArrow.y;
+
+  // Close: single click + fixed delay. No detection polling to avoid
+  // false "still open" → second click → toggle storm.
+  ctx.window.clear();
+  await ctx.client.pressAndCollect(arrowX, arrowY);
+  await ctx.delay(1500);
+  // Drain any pending paint commands from the close transition
+  await ctx.pollPaintCommands(`drag-sync-close-drain:${reason}`);
+
+  // Open: single click + wait for labels
+  ctx.window.clear();
+  const openCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
+  ctx.window.append(openCmds);
+
+  let openDetected = isDropdownOpen(ctx.window.getCommands());
+  if (!openDetected) {
+    const deadline = Date.now() + 5000;
+    let poll = 0;
+    while (Date.now() < deadline) {
+      poll++;
+      await ctx.pollPaintCommands(`drag-sync-open-wait:${reason}:${poll}`);
+      if (isDropdownOpen(ctx.window.getCommands())) {
+        openDetected = true;
+        break;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining > 0) await ctx.delay(Math.min(150, remaining));
+    }
+  }
+
+  if (!openDetected) {
+    logger.warn({ reason }, 'Drag sync reopen did not detect open — clicking again');
+    ctx.window.clear();
+    const retryCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
+    ctx.window.append(retryCmds);
+    const retryDeadline = Date.now() + 3000;
+    let retryPoll = 0;
+    while (Date.now() < retryDeadline) {
+      retryPoll++;
+      await ctx.pollPaintCommands(`drag-sync-open-retry:${reason}:${retryPoll}`);
+      if (isDropdownOpen(ctx.window.getCommands())) {
+        openDetected = true;
+        break;
+      }
+      const remaining = retryDeadline - Date.now();
+      if (remaining > 0) await ctx.delay(Math.min(150, remaining));
+    }
+  }
+
+  const settled = await waitForDropdownReady(ctx, {
+    reason: `drag-sync-settle:${reason}`,
+    timeoutMs: openDetected ? 2200 : 1200,
+    requireFreshLabels: true,
+  });
+  const view = settled.view ?? resolveDropdownView(ctx.window.getCommands());
+  if (view) {
+    ctx.state.applyDropdownView(view);
+    logger.info({ reason, firstVisible: view.firstVisible }, 'Drag sync: dropdown reopened and synced');
+  } else {
+    logger.warn({ reason, openDetected }, 'Drag sync: reopen produced no view');
+  }
+
+  return { view };
 }
 
 export async function reopenDropdownFromClosed(
@@ -106,6 +205,8 @@ export async function reopenDropdownFromClosed(
   }
 
   if (!openDetected) {
+    // One retry click — the first click may have reopened a closed dropdown
+    // that then closed again, or the PLC was slow to render.
     ctx.window.clear();
     const retryCmds = await ctx.client.pressAndCollect(arrowX, arrowY);
     ctx.window.append(retryCmds);

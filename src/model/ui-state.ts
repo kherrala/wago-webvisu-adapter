@@ -20,6 +20,13 @@ export class UIState {
   dropdownVisibleLabels: DropdownLabel[] = [];
   dropdownSelectedHeader: string | null = null;
 
+  // The PLC's scrollbar widget has a persistent scroll position (used for
+  // click mapping) that survives dropdown close/reopen and even reconnects.
+  // This tracks the last known widget position so we can grab the scrollbar
+  // thumb at the correct Y coordinate for drag-based position resets.
+  // Set to the dropdownFirstVisible value after a successful item click.
+  widgetScrollPosition = 0;
+
   // --- Derived geometry ---
   get dropdownHandleCenterY(): number {
     return this.getDropdownScrollY(this.dropdownFirstVisible);
