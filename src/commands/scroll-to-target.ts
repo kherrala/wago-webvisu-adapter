@@ -121,7 +121,7 @@ export async function scrollToTarget(
 
   const syncStart = Date.now();
   const syncDeadline = syncStart + 18000;
-  const minSyncMs = 10000; // Both clicks need ~10s to be fully rendered
+  const minSyncMs = 0; // No floor — rely on syncMoved + 8 stable polls
   let lastSyncFv: number | null = null;
   let syncStable = 0;
   let syncMoved = false;
