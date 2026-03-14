@@ -38,6 +38,18 @@ export interface DebugSnapshot {
   png: Buffer;
 }
 
+/** Thrown when a background operation is interrupted by a priority request. */
+export class OperationInterruptedError extends Error {
+  constructor() { super('Operation interrupted by priority request'); this.name = 'OperationInterruptedError'; }
+}
+
+interface QueuedOperation {
+  operation: () => Promise<any>;
+  resolve: (value: any) => void;
+  reject: (reason: any) => void;
+  priority: boolean;
+}
+
 export class ProtocolController implements IWebVisuController, CommandContext {
   private static readonly RECONNECT_EMPTY_THRESHOLD = 10;
   private static readonly RECONNECT_COOLDOWN_MS = 30_000;
@@ -49,8 +61,11 @@ export class ProtocolController implements IWebVisuController, CommandContext {
   readonly logger = logger;
 
   private initialized = false;
-  private operationQueue: Promise<unknown> = Promise.resolve();
+  private opQueue: QueuedOperation[] = [];
+  private isProcessingQueue = false;
   private pendingOperations = 0;
+  private runningBackground = false;
+  private interruptFlag = false;
   private collectedSnapshots: DebugSnapshot[] = [];
   private snapshotSequence = 0;
 
@@ -119,6 +134,9 @@ export class ProtocolController implements IWebVisuController, CommandContext {
   // ---------------------------------------------------------------------------
 
   async pollPaintCommands(reason: string): Promise<PaintCommand[]> {
+    if (this.runningBackground && this.interruptFlag) {
+      throw new OperationInterruptedError();
+    }
     const request = buildViewportEvent(
       this.client.getClientId(),
       config.browser.viewport.width,
@@ -146,6 +164,9 @@ export class ProtocolController implements IWebVisuController, CommandContext {
   }
 
   delay(ms: number): Promise<void> {
+    if (this.runningBackground && this.interruptFlag) {
+      throw new OperationInterruptedError();
+    }
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
@@ -233,6 +254,9 @@ export class ProtocolController implements IWebVisuController, CommandContext {
       try {
         return await this.doSelectLightSwitchOnce(lightId, index);
       } catch (error) {
+        // Let interrupts propagate immediately — no retry or reconnect
+        if (error instanceof OperationInterruptedError) throw error;
+
         lastError = error instanceof Error ? error : new Error(String(error));
         const isHeaderMismatch = lastError instanceof DropdownHeaderMismatchError;
         const message = lastError.message ?? '';
@@ -443,7 +467,8 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     });
   }
 
-  async getLightStatus(lightId: string): Promise<LightStatus> {
+  async getLightStatus(lightId: string, options?: { background?: boolean }): Promise<LightStatus> {
+    const isPriority = !options?.background;
     return this.queueOperation(async () => {
       this.ensureInitialized();
 
@@ -528,7 +553,7 @@ export class ProtocolController implements IWebVisuController, CommandContext {
         isOn: isOn1,
         ...(isOn2 !== undefined ? { isOn2 } : {}),
       };
-    });
+    }, isPriority);
   }
 
   async getAllLights(): Promise<LightStatus[]> {
@@ -616,15 +641,49 @@ export class ProtocolController implements IWebVisuController, CommandContext {
     }
   }
 
-  private async queueOperation<T>(operation: () => Promise<T>): Promise<T> {
-    this.pendingOperations++;
-    try {
-      const result = this.operationQueue.then(operation);
-      this.operationQueue = result.catch(() => {});
-      return await result;
-    } finally {
-      this.pendingOperations--;
+  private queueOperation<T>(operation: () => Promise<T>, priority = true): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const item: QueuedOperation = { operation, resolve, reject, priority };
+      if (priority) {
+        // Insert after other priority items but before background items
+        const insertIdx = this.opQueue.findIndex(op => !op.priority);
+        if (insertIdx === -1) {
+          this.opQueue.push(item);
+        } else {
+          this.opQueue.splice(insertIdx, 0, item);
+        }
+        // Signal background ops to abort — a priority request needs the PLC
+        if (this.runningBackground) {
+          this.interruptFlag = true;
+        }
+      } else {
+        this.opQueue.push(item);
+      }
+      this.pendingOperations++;
+      this.processQueue();
+    });
+  }
+
+  private async processQueue(): Promise<void> {
+    if (this.isProcessingQueue) return;
+    this.isProcessingQueue = true;
+
+    while (this.opQueue.length > 0) {
+      const item = this.opQueue.shift()!;
+      this.runningBackground = !item.priority;
+      this.interruptFlag = false;
+      try {
+        const result = await item.operation();
+        item.resolve(result);
+      } catch (error) {
+        item.reject(error);
+      } finally {
+        this.runningBackground = false;
+        this.pendingOperations--;
+      }
     }
+
+    this.isProcessingQueue = false;
   }
 
   private async doReconnect(reason: string): Promise<void> {

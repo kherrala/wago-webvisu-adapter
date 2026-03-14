@@ -1,5 +1,6 @@
 import { config, lightList, lightById, lightPrimaryController, lightSwitches, lightSwitchById } from './config';
 import { IWebVisuController } from './controller-interface';
+import { OperationInterruptedError } from './protocol-controller';
 import { upsertLightStatus, setMetadata, getMetadata } from './database';
 import pino from 'pino';
 
@@ -70,14 +71,6 @@ async function pollLoop(): Promise<void> {
   const siblingPolled = new Set<string>();
 
   while (!shouldStop) {
-    // Wait if there are pending operations
-    const pendingOps = controller.getPendingOperationCount();
-    if (pendingOps > 0) {
-      logger.debug(`Waiting for ${pendingOps} pending operations to complete`);
-      await delay(500);
-      continue;
-    }
-
     const lightId = pollableLightIds[currentIndex];
     const light = lightById[lightId];
     const primary = lightPrimaryController[lightId];
@@ -102,7 +95,7 @@ async function pollLoop(): Promise<void> {
     try {
       logger.debug(`Polling light ${lightId} (${currentIndex + 1}/${pollableLightIds.length})`);
 
-      const switchStatus = await controller.getLightStatus(primary.switchId);
+      const switchStatus = await controller.getLightStatus(primary.switchId, { background: true });
       const isOn = primary.functionNumber === 2 ? switchStatus.isOn2 ?? false : switchStatus.isOn;
 
       upsertLightStatus({
@@ -142,6 +135,11 @@ async function pollLoop(): Promise<void> {
 
       logger.debug(`Polled ${lightId}: isOn=${isOn}`);
     } catch (error) {
+      if (error instanceof OperationInterruptedError) {
+        logger.info({ lightId }, 'Poll interrupted by priority request — yielding');
+        // Don't advance index — retry this light after priority op finishes
+        continue;
+      }
       logger.error({ err: error, lightId }, `Error polling light ${lightId}`);
     }
 

@@ -19,7 +19,7 @@ export interface IWebVisuController {
   close(): Promise<void>;
   selectLightSwitch(lightId: string): Promise<void>;
   toggleLight(lightId: string, functionNumber?: 1 | 2): Promise<void>;
-  getLightStatus(lightId: string): Promise<LightStatus>;
+  getLightStatus(lightId: string, options?: { background?: boolean }): Promise<LightStatus>;
   getAllLights(): Promise<LightStatus[]>;
   navigateToTab(tabName: string): Promise<void>;
   takeScreenshot(): Promise<Buffer>;
