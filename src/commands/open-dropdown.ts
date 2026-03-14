@@ -29,6 +29,25 @@ export async function openDropdown(
   // Check accumulated commands for open detection
   // (PLC renders dropdown labels progressively across multiple frames)
   let openDetected = isDropdownOpen(ctx.window.getCommands());
+
+  // If pressAndCollect returned a large response (full page repaint) but no
+  // dropdown labels, the click likely toggled a stale-open dropdown closed.
+  // The PLC sometimes retains an internal "dropdown open" state after a rapid
+  // select cycle, even though the visual render shows it closed. Our first
+  // arrow click then closes it instead of opening it. A second click opens
+  // it properly.
+  if (!openDetected && clickCommands.length > 50) {
+    logger.info({ commandCount: clickCommands.length }, 'Large response without dropdown — retrying (likely toggled stale dropdown closed)');
+    await ctx.delay(500);
+    ctx.window.clear();
+    await ctx.pollPaintCommands(`dropdown-open-retry-drain:${lightId}`);
+    ctx.window.clear();
+    const retryCommands = await ctx.client.pressAndCollect(arrowX, arrowY);
+    ctx.window.append(retryCommands);
+    openDetected = isDropdownOpen(ctx.window.getCommands());
+    logger.info({ retryCommandCount: retryCommands.length, openDetected }, 'Retry click result');
+  }
+
   if (!openDetected) {
     const deadline = Date.now() + dropdownOpenTimeoutMs;
     let poll = 0;
