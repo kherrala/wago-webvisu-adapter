@@ -120,9 +120,10 @@ export async function arrowScrollOneByOne(
     scrollAttempt: number;
     targetFirstVisible?: number;
     interClickDelayMs?: number;
+    perClickTimeoutMs?: number;
   },
 ): Promise<ScrollSettleResult> {
-  const { arrowX, arrowY, clickCount, direction, startFirstVisible, scrollAttempt, targetFirstVisible, interClickDelayMs = 100 } = options;
+  const { arrowX, arrowY, clickCount, direction, startFirstVisible, scrollAttempt, targetFirstVisible, interClickDelayMs = 100, perClickTimeoutMs = 20000 } = options;
 
   let currentFirstVisible = startFirstVisible;
   let latestView: DropdownView | null = null;
@@ -143,7 +144,7 @@ export async function arrowScrollOneByOne(
       // PLC arrow click visual updates take 7–10s under load; 10s timeout
       // causes phantom stalls where the click IS processed but the render
       // arrives just after the deadline, creating click-mapping desync.
-      const perClickDeadline = Date.now() + 20000;
+      const perClickDeadline = Date.now() + perClickTimeoutMs;
 
       while (Date.now() < perClickDeadline) {
         const cmds = await ctx.pollPaintCommands(`arrow-click:${scrollAttempt}:${i}:${attempt}`);

@@ -131,10 +131,9 @@ export async function scrollToTarget(
   // Phase 2.5: Arrow-UP to re-align widget with visual.
   // After drag + arrow-down sync, the PLC's widget (click-mapping) position
   // may be 1 ahead of the visual. One arrow-UP re-aligns the widget to match
-  // the visual without changing the visual itself. The arrowScrollOneByOne
-  // polls for a visual DECREASE (which won't happen — the re-sync only
-  // affects the widget), but the 20s of polling gives the PLC time to
-  // process the re-alignment.
+  // the visual. The visual may transiently increase (D→D+1) then settle back
+  // to D. The polling duration must be long enough for this round-trip.
+  // Continuous polling (heartbeats) keeps the PLC's widget synchronized.
   if (ctx.state.dropdownFirstVisible > 0) {
     const upBtn = scrollbarConfig.arrowUp;
     const resyncResult = await arrowScrollOneByOne(ctx, {
@@ -144,6 +143,7 @@ export async function scrollToTarget(
       direction: 'up',
       startFirstVisible: ctx.state.dropdownFirstVisible,
       scrollAttempt: 0,
+      perClickTimeoutMs: 15000,
     });
     if (resyncResult.closedDetected) {
       logger.warn({ lightId }, 'Dropdown closed during resync arrow-up');
