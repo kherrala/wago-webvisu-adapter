@@ -267,13 +267,8 @@ export class ProtocolController implements IWebVisuController, CommandContext {
 
     const dropdownConfig = uiCoordinates.lightSwitches.dropdownList;
 
-    // Drain pending PLC frames from the previous operation and let the PLC
-    // settle before starting a new selection. Without this, ensureDropdownClosed
-    // sees empty/minimal transition frames, returns immediately, and the
-    // subsequent openDropdown click arrives while the PLC is still processing.
+    // Clear command window to avoid stale labels from previous operations
     this.window.clear();
-    await this.pollPaintCommands(`drain:${lightId}`);
-    await this.delay(300);
 
     // Step 1: Ensure dropdown is closed
     await ensureDropdownClosed(this, `select-start:${lightId}`);

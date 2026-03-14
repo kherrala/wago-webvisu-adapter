@@ -2,7 +2,6 @@ import { uiCoordinates } from '../config';
 import { CommandContext } from '../model/command-context';
 import { DropdownView, resolveDropdownView } from '../model/dropdown-labels';
 import { isDropdownOpen, isDropdownDefinitivelyClosed } from '../model/dropdown-detection';
-import { classifyFrame } from '../protocol/frame-classifier';
 import { waitForDropdownReady } from '../model/wait-for-dropdown';
 import pino from 'pino';
 
@@ -27,16 +26,11 @@ export async function ensureDropdownClosed(
   // Clear window for fresh close detection
   ctx.window.clear();
 
-  // Phase 1: Check if already closed (up to 1.5s)
-  // Require at least one frame with real content before accepting "not open"
-  // as evidence of closed. Empty/minimal frames during PLC transitions can
-  // cause false negatives — the PLC may still have the dropdown open internally
-  // but hasn't rendered the dropdown labels yet.
-  const probeDeadline = Date.now() + 1500;
+  // Phase 1: Check if already closed (up to 1s)
+  const probeDeadline = Date.now() + 1000;
   let notOpenStreak = 0;
   let poll = 0;
   let openSeen = false;
-  let contentfulFrameSeen = false;
   while (Date.now() < probeDeadline) {
     poll++;
     const probeCmds = await ctx.pollPaintCommands(`dropdown-close-probe:${reason}:${poll}`);
@@ -46,16 +40,9 @@ export async function ensureDropdownClosed(
     const accumulated = ctx.window.getCommands();
     if (isDropdownDefinitivelyClosed(accumulated) && !isDropdownOpen(accumulated)) return;
 
-    // Track whether we've seen a frame with real content (not empty/minimal)
-    const classification = classifyFrame(probeCmds);
-    if (classification.textLabelCount > 0 || classification.imageCount > 0) {
-      contentfulFrameSeen = true;
-    }
-
     if (!isDropdownOpen(probeCmds)) {
       notOpenStreak++;
-      // Only accept "not open" as closed if we've seen actual content
-      if (notOpenStreak >= 2 && contentfulFrameSeen) return;
+      if (notOpenStreak >= 2) return;
     } else {
       notOpenStreak = 0;
       openSeen = true;
