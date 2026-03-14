@@ -28,9 +28,12 @@ export async function openDropdown(
 
   // Check accumulated commands for open detection
   // (PLC renders dropdown labels progressively across multiple frames)
+  // Use shorter timeout (3s) for first attempt — if it was a toggle-close,
+  // we want to retry quickly rather than wait the full 6s.
   let openDetected = isDropdownOpen(ctx.window.getCommands());
   if (!openDetected) {
-    const deadline = Date.now() + dropdownOpenTimeoutMs;
+    const firstAttemptTimeout = Math.min(3000, dropdownOpenTimeoutMs);
+    const deadline = Date.now() + firstAttemptTimeout;
     let poll = 0;
     while (Date.now() < deadline) {
       poll++;
@@ -47,8 +50,11 @@ export async function openDropdown(
   // If the first click didn't open the dropdown, it may have CLOSED it instead
   // (the PLC had the dropdown open internally from the previous operation, but
   // ensureDropdownClosed couldn't detect it). A second click reopens it.
+  // Reset widget position — after the close/reopen toggle, the PLC's widget
+  // state is unknown and our tracked position is likely stale.
   if (!openDetected) {
     logger.warn({ lightId }, 'First click did not open dropdown — retrying (likely toggled closed)');
+    ctx.state.widgetScrollPosition = 0;
     ctx.window.clear();
     const retryCommands = await ctx.client.pressAndCollect(arrowX, arrowY);
     ctx.window.append(retryCommands);
